@@ -118,6 +118,11 @@ public class MainActivity extends AppCompatActivity implements IReporter {
         binding.outputView.append("\n");
         logBuffer.append(line).append('\n');
         saveLog();
+        // Mirror to logcat under a fixed tag as well. The run log lives in the
+        // app's device-protected dir, which is unreachable from adb on this
+        // device (run-as is refused and SELinux denies the path), so without
+        // this an automated run has no readable trace of what it did.
+        Log.i("dfrootrun", line);
     }
 
     /** Translates raw native log lines into two-step progress-bar states.

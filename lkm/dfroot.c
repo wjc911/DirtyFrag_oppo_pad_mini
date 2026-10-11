@@ -189,22 +189,15 @@ static int df_count_pre_handler(struct kprobe *p, struct pt_regs *regs)
 
 /* Same, and additionally skips the function body.
  *
- * Also keeps the observation machinery alive: every primary hit re-arms the
- * snapshot/respawn work.  The periodic timer alone proved unreliable in the
- * field -- an observed run had a frozen sink (mtime unchanged, can=0), i.e. the
- * re-arm never happened -- so the event stream itself now drives it.  Called
- * from probe context, so this does nothing but a schedule_delayed_work, which
- * does not sleep; a 3s debounce keeps it from resetting the timer faster than
- * it can ever fire. */
+ * Reverted to the minimal form: it used to re-arm the snapshot work item from
+ * here (3s debounce) so the event stream kept observation alive, but that was
+ * one of the two changes in the build that panicked the device with
+ * oops_-_cfi:_fatal_exception. Doing anything beyond an increment and a
+ * return-to-caller inside a probe handler that runs on hot paths like
+ * __alloc_skb is not worth the risk until the panic is understood. */
 static int df_short_pre_handler(struct kprobe *p, struct pt_regs *regs)
 {
-    static unsigned long last_arm;
-
     df_count_pre_handler(p, regs);
-    if (time_after(jiffies, last_arm + msecs_to_jiffies(3000))) {
-        last_arm = jiffies;
-        schedule_delayed_work(&df_live_work, msecs_to_jiffies(1000));
-    }
     return null_pre_handler(p, regs);
 }
 
@@ -418,15 +411,13 @@ static unsigned int df_live_ticks;
 static s64 df_live_t0_ns;
 static bool df_live_stop;
 
-/* Bridge state, kept at module scope so the snapshot work item can respawn the
- * bridge on its own.  As locals of dfroot_init the pointers were unreachable
- * after init returned, so nothing could restart a bridge that died. */
-static umh_setup_t df_umh_setup;
-static umh_exec_t  df_umh_exec;
-static int df_bridge_armed;
-static unsigned int df_bridge_spawns;
-
-static void df_umh_bridge(umh_setup_t umh_setup, umh_exec_t umh_exec);
+/* NOTE: bridge state is intentionally absent here.
+ *
+ * A previous revision hoisted the usermodehelper pointers to module scope so
+ * the snapshot work item could respawn the bridge. That build panicked the
+ * device (oops_-_cfi:_fatal_exception) and the respawn has been removed, so
+ * keeping the state would only leave a misleading invitation to re-add it.
+ * df_umh_bridge is called exactly once, from dfroot_init. */
 
 static struct kprobe df_skb_canary;
 static int df_skb_canary_ok;
@@ -593,29 +584,17 @@ static void df_live_tick(struct work_struct *w)
         df_live_write(sbuf);
     }
 
-    /* Keep the root bridge alive.  The bridge is a usermodehelper child running
-     * a bounded loop; if it exits (or a spawn silently failed) the root command
-     * channel and the /dev mirror both disappear, which is exactly what was
-     * observed.  Its liveness signal is the output file it appends to; when that
-     * stops changing, respawn.  Rate-limited so a permanently blocked spawn
-     * cannot turn into a spawn loop. */
-    if (df_bridge_armed && df_umh_setup && df_umh_exec && df_live_ticks % 5 == 0) {
-        static unsigned long last_spawn;
-
-        if (!df_file_exists(DF_APP_DIR "/files/dfroot-live2.txt") &&
-            time_after(jiffies, last_spawn + msecs_to_jiffies(30000))) {
-            last_spawn = jiffies;
-            df_bridge_spawns++;
-            df_umh_bridge(df_umh_setup, df_umh_exec);
-            pr_info("dfroot: bridge respawn #%u\n", df_bridge_spawns);
-        }
-    }
-
-    /* Re-arm unconditionally: the sink is the only channel through which this
-     * module's state can be observed, so it must not stop on its own.  It used
-     * to stop at DF_LIVE_MAX_TICKS, which silently ended observation during a
-     * long session. */
-    if (!df_live_stop)
+    /* NOTE: the bridge is deliberately NOT respawned from here any more.
+     * Spawning a usermodehelper and re-arming from the snapshot work item were
+     * the two changes present when the device panicked (bootReason
+     * kernel_panic,oops_-_cfi:_fatal_exception). The bridge already has its own
+     * one-shot spawn at load, gated behind /data/local/tmp/dfroot-umh, and that
+     * interlock stays until the panic is understood.
+     *
+     * Re-arm only while under the tick budget: an unconditional re-arm is
+     * harmless on its own, but the bounded form is what the last-known-good
+     * build used and this is not the round to broaden the blast radius. */
+    if (!df_live_stop && df_live_ticks < DF_LIVE_MAX_TICKS)
         schedule_delayed_work(&df_live_work,
                               msecs_to_jiffies(DF_LIVE_INTERVAL_MS));
 }
@@ -684,11 +663,20 @@ static void df_umh_bridge(umh_setup_t umh_setup, umh_exec_t umh_exec)
     static char *argv[] = { (char *)sh, "-c", (char *)df_bridge_script, NULL };
     void *info;
 
-    /* No longer gated behind /data/local/tmp/dfroot-umh.  That flag made the
-     * root command channel opt-in, which is why the bridge was absent in most
-     * runs and why the channel "existed once" (dfout, 2026-10-11 22:33) but
-     * never again.  The v1.16 panic it guarded against is handled by the
-     * selinux write ordering, and the caller keeps this spawn rate-limited. */
+    /* GATE RESTORED. Removing it caused a real kernel panic on device:
+     *   bootReason=kernel_panic,oops_-_cfi:_fatal_exception
+     * with the device rebooting at ~01:52, which wiped the installed app, the
+     * app data and the disabled-guard state. The flag is an interlock against
+     * exactly that (v1.16 panicked twice here), not a redundant switch, and
+     * treating it as one was a mistake. The root command channel stays opt-in
+     * until the panic is understood.
+     *
+     * Touch /data/local/tmp/dfroot-umh to enable it deliberately, for an
+     * isolated A/B with the panic watched for. */
+    if (!df_file_exists("/data/local/tmp/dfroot-umh")) {
+        pr_info("dfroot: umh bridge disabled (no flag file)\n");
+        return;
+    }
     if (!umh_setup || !umh_exec)
         return;
     info = umh_setup(sh, argv, envp, GFP_KERNEL, NULL, NULL, NULL);
@@ -1003,9 +991,8 @@ static int __nocfi __init dfroot_init(void)
 
     // Kernel-side observation bridge: kthreadd-parented, outside every app
     // cgroup, so the freezer that killed the bootstrap daemon can't reach it.
-    df_umh_setup = umh_setup;
-    df_umh_exec  = umh_exec;
-    df_bridge_armed = 1;
+    // Gated behind /data/local/tmp/dfroot-umh (panics without it, see the
+    // interlock comment in df_umh_bridge).
     df_umh_bridge(umh_setup, umh_exec);
 
     // One-shot root command staged at /data/local/tmp/dfcmd.

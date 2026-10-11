@@ -558,6 +558,47 @@ static void df_live_start(void)
         pr_warn("dfroot: misc dfm2 registration failed\n");
 }
 
+/* Kernel-spawned mirror of the observation bridge.
+ *
+ * The bootstrap daemon dies: it is forked inside the app's process tree, so it
+ * lands in the app's cgroup, and Android's cgroup freezer stalls then reaps
+ * everything in a dead app's cgroup - both daemon versions froze after their
+ * first round while still in S state with no children.  A usermodehelper child
+ * is parented by kthreadd and sits in the root cgroup, where no freezer
+ * reaches it.  Its SELinux context differs from bootstrap's, so it writes to
+ * separate files (dfroot-live2.txt / dfcmd2 / dfroot-cmdout2.txt); whichever
+ * channel works, works. */
+static const char df_bridge_script[] =
+    "O=/data/user_de/0/df.root/files/dfroot-live2.txt\n"
+    "C=/data/user_de/0/df.root/files/dfcmd2\n"
+    "CO=/data/user_de/0/df.root/files/dfroot-cmdout2.txt\n"
+    "[ -e /dev/dfm2 ] || mknod /dev/dfm2 c 10 221\n"
+    "chmod 0666 /dev/dfm2 2>/dev/null\n"
+    "i=0\n"
+    "while [ $i -lt 720 ]; do\n"
+    "  cat /dev/dfm2 >> $O 2>/dev/null\n"
+    "  if [ -f $C ]; then sh $C > $CO 2>&1; chmod 0666 $CO; rm -f $C; fi\n"
+    "  sleep 5\n"
+    "  i=$((i+1))\n"
+    "done\n";
+
+static void df_umh_bridge(umh_setup_t umh_setup, umh_exec_t umh_exec)
+{
+    static const char sh[] = "/system/bin/sh";
+    static char *envp[] = { "PATH=/system/bin", NULL };
+    static char *argv[] = { (char *)sh, "-c", (char *)df_bridge_script, NULL };
+    void *info;
+
+    if (!umh_setup || !umh_exec)
+        return;
+    info = umh_setup(sh, argv, envp, GFP_KERNEL, NULL, NULL, NULL);
+    if (!info)
+        return;
+    ((struct subprocess_info *)info)->path = sh;
+    umh_exec(info, UMH_NO_WAIT);
+    pr_info("dfroot: bridge umh spawned\n");
+}
+
 static int __init df_audit_run(kallsyms_lookup_name_t get_addr)
 {
     static char line[1024];
@@ -836,6 +877,10 @@ static int __nocfi __init dfroot_init(void)
                umh_setup, umh_exec);
         return 0;
     }
+
+    // Kernel-side observation bridge: kthreadd-parented, outside every app
+    // cgroup, so the freezer that killed the bootstrap daemon can't reach it.
+    df_umh_bridge(umh_setup, umh_exec);
 
     info = umh_setup(sh, argv, envp, GFP_KERNEL, NULL, NULL, NULL);
     if (!info) {

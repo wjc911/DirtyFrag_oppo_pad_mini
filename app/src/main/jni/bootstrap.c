@@ -281,11 +281,34 @@ static void bridge_loop(void)
 
 static void start_bridge(void)
 {
-    pid_t pid = fork();
+    /* The daemon is forked from the app's process tree, which puts it inside
+     * the app's cgroup - and Android's cgroup freezer stalls (then kills)
+     * everything in a dead/cached app's cgroup.  That is exactly how the two
+     * daemon versions died after their first round: alive, S state, no
+     * children, mid-loop.  Escape to the root cgroup before looping; if the
+     * write is denied, keep going and let the kernel-UMH bridge (dfroot.ko)
+     * carry the channel instead. */
+    static const char *cgroup_procs[] = {
+        "/sys/fs/cgroup/cgroup.procs",
+        "/sys/fs/cgroup/uid_0/cgroup.procs",
+        NULL,
+    };
+    char pidbuf[16];
+    int len = snprintf(pidbuf, sizeof(pidbuf), "%d", getpid());
+    int i;
 
+    pid_t pid = fork();
     if (pid != 0)
         return;              /* parent continues; child becomes the daemon */
     setsid();
+    for (i = 0; cgroup_procs[i]; i++) {
+        int fd = open(cgroup_procs[i], O_WRONLY);
+        if (fd >= 0) {
+            if (write(fd, pidbuf, (size_t)len) < 0) { /* best effort */ }
+            close(fd);
+            break;
+        }
+    }
     bridge_loop();
     _exit(0);
 }

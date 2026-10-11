@@ -431,6 +431,18 @@ static int df_canary_pre_handler(struct kprobe *p, struct pt_regs *regs)
  * reader tell fresh from stale. */
 #define DF_LIVE_PATH "/dev/dfm4"
 
+/* Second sink, in a directory an adb shell can certainly read and write.
+ *
+ * /dev is not enough: the nodes there are created by this module but an adb
+ * shell (uid 2000, u:r:shell:s0) is refused even `stat` on them while SELinux
+ * is Enforcing, which was measured on both /dev/dfm0 and /dev/dfm4 -- the file
+ * exists, mode 0666, and still cannot be read.  /data/local/tmp is on the
+ * shell's own allow-list (verified by writing a probe file from adb shell), and
+ * a kernel-context write there is not subject to the shell's SELinux policy.
+ * Writing both costs nothing and removes the dependency on the misc device or
+ * on a live root bridge. */
+#define DF_LIVE_PATH2 "/data/local/tmp/dfroot-live.txt"
+
 static void df_live_write(const char *msg)
 {
     struct file *f;
@@ -439,10 +451,16 @@ static void df_live_write(const char *msg)
     if (!df_filp_open || !df_kernel_write)
         return;
     f = df_filp_open(DF_LIVE_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    if (IS_ERR(f))
-        return;
-    df_kernel_write(f, msg, strlen(msg), &pos);
-    filp_close(f, NULL);
+    if (!IS_ERR(f)) {
+        df_kernel_write(f, msg, strlen(msg), &pos);
+        filp_close(f, NULL);
+    }
+    pos = 0;
+    f = df_filp_open(DF_LIVE_PATH2, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (!IS_ERR(f)) {
+        df_kernel_write(f, msg, strlen(msg), &pos);
+        filp_close(f, NULL);
+    }
 }
 
 /* Format the current snapshot: a LIVE0 line (arming-time addresses) plus a

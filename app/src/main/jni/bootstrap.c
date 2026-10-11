@@ -204,10 +204,20 @@ static void publish_audit(void)
         return;
 
     FILE *f = fopen(DF_DE_DIR "/files/dfroot-audit.txt", "w");
-    if (!f)
-        return;
-    fwrite(buf, 1, (size_t)n, f);
-    fclose(f);
+    if (f) {
+        fwrite(buf, 1, (size_t)n, f);
+        fclose(f);
+    }
+    /* Second copy where an adb shell can actually reach it: this helper runs as
+     * root, and 'run-as' is refused on this device (it needs to read
+     * /data/system/packages.list, which SELinux denies to shell), so the app's
+     * own dir is not readable by the party verifying the result. */
+    f = fopen("/data/local/tmp/dfroot-audit.txt", "w");
+    if (f) {
+        fwrite(buf, 1, (size_t)n, f);
+        fclose(f);
+        chmod("/data/local/tmp/dfroot-audit.txt", 0666);
+    }
 }
 
 /* Root observation bridge, started as a detached daemon.

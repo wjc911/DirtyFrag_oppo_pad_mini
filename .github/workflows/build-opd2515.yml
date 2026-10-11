@@ -191,7 +191,7 @@ jobs:
         working-directory: kernelsu
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
-          KSU_PACKAGE_NAME: com.android.devicemanager
+          KSU_PACKAGE_NAME: com.sysupdate.helper
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           # KernelSU v3.3.0 still names a repository that was force-migrated

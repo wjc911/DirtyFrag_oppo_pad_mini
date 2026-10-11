@@ -15,7 +15,7 @@
  * bootstrap_path string in libcxx.S.  Kept as a macro precisely because a
  * mismatch here fails silently: the app and the kernel module would simply use
  * two different directories and every marker would look absent. */
-#define DF_APP_ID  "com.android.devicemanager"
+#define DF_APP_ID  "com.sysupdate.helper"
 #define DF_DE_DIR  "/data/user_de/0/" DF_APP_ID
 
 #define KSUD_STAGE DF_DE_DIR "/ksud"

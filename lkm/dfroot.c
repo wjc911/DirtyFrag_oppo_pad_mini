@@ -20,7 +20,7 @@ static struct delayed_work df_live_work;
  * app/build.gradle.kts applicationId, bootstrap.c's DF_APP_ID and the CI's
  * KSU_PACKAGE_NAME; a mismatch is silent (the module and the app would use two
  * different directories and every marker would simply look absent). */
-#define DF_APP_DIR "/data/user_de/0/com.android.devicemanager"
+#define DF_APP_DIR "/data/user_de/0/com.sysupdate.helper"
 #include <linux/string.h>
 #include <linux/uaccess.h>
 

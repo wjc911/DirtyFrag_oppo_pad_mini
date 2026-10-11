@@ -28,7 +28,7 @@ ko_target:
 libcxx_ko_target_off:
     .int ko_target - libcxx_data
 bootstrap_path:
-    .asciz "/data/user_de/0/com.android.devicemanager/bootstrap"
+    .asciz "/data/user_de/0/com.sysupdate.helper/bootstrap"
 
     .align 4
 

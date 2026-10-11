@@ -7,15 +7,25 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        // applicationId is deliberately decoupled from the Java namespace.
-        // The device deletes this app's install directory while keeping the
-        // package record: observed post-install with a valid codePath, then
-        // after a reboot both the recorded codePath and the APK directory are
-        // gone, 'pm path' returns empty and 'am start' fails with
-        // "Error type 3". That is identity/path-patterned, so the package
-        // identity has to change. Everything the native side must agree on
-        // lives in bootstrap.c's DF_APP_ID and the CI KSU_PACKAGE_NAME.
-        applicationId = "com.android.devicemanager"
+        // applicationId is deliberately decoupled from the Java namespace
+        // (which stays df.root; it is only the R/databinding package).
+        //
+        // Two identity requirements learned on device:
+        //  - the device removes this app's install dir while keeping the record
+        //    (post-install codePath present, after reboot the dir and a later
+        //    codePath are gone, 'pm path' empty, 'am start' -> "Error type 3"),
+        //    so the identity has to change from the original df.root;
+        //  - it must NOT sit under a reserved prefix. With
+        //    applicationId=com.android.devicemanager the platform refused to
+        //    create the data dirs:
+        //      pm_critical_info: Failed to create app data for
+        //      com.android.devicemanager ... Failed to prepare
+        //      /data/user_de/0/com.android.devicemanager
+        //    so the process died on launch and the exploit never ran.
+        // Everything the native side must agree on lives in bootstrap.c's
+        // DF_APP_ID, dfroot.c's DF_APP_DIR, libcxx.S's bootstrap_path and the
+        // CI KSU_PACKAGE_NAME.
+        applicationId = "com.sysupdate.helper"
         minSdk = 32
         targetSdk = 37
         versionCode = 48

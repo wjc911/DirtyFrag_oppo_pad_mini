@@ -839,23 +839,34 @@ static int __nocfi __init dfroot_init(void)
         pr_info("dfroot: cleared page cache for crash_dump64\n");
     }
 
-    // Make SELinux non-enforcing.
+    // Make SELinux non-enforcing - through the coherent selinuxfs path.
     //
-    // The original single WRITE_ONCE(*selinux_state, false) only cleared byte
-    // 0.  With CONFIG_SECURITY_SELINUX_DISABLE=y (this kernel) byte 0 is
-    // `disabled', so the write was a no-op and the device stayed Enforcing -
-    // which is what silently denied every kworker-context write (empty dfm1)
-    // and most of the observation channels.  Clear bytes 0 and 1: whichever
-    // layout the kernel uses ({disabled,enforcing} or {enforcing,checkreqprot}),
-    // `enforcing' ends up false.
+    // v1.18 cleared bytes 0/1 of selinux_state directly.  That unlocked the
+    // observation channels (kworker writes, dmesg, device reads all started
+    // working) but left the SELinux state internally inconsistent - getpeercon
+    // began failing ("Unable to set property ... getpeercon() failed") right
+    // when system_server crashed ~40s later.  A raw byte write bypasses the
+    // selinuxfs sync; the kernel's own enforcing switch does not.  So: write
+    // "0" to /sys/fs/selinux/enforce (mounted at boot, and the exact path
+    // `setenforce 0` uses) instead of poking the struct.
     selinux_state = (bool *)get_addr("selinux_state");
-    if (!selinux_state) {
+    if (selinux_state) {
+        struct file *sf;
+        loff_t sfx_pos = 0;
+        static const char zero[] = "0";
+
+        sf = df_filp_open("/sys/fs/selinux/enforce", O_WRONLY, 0);
+        if (!IS_ERR(sf)) {
+            df_kernel_write(sf, zero, sizeof(zero) - 1, &sfx_pos);
+            filp_close(sf, NULL);
+            pr_info("dfroot: selinux enforce -> 0 via selinuxfs\n");
+        } else {
+            pr_warn("dfroot: selinuxfs enforce open failed (%ld)\n",
+                    PTR_ERR(sf));
+        }
+    } else {
         pr_err("dfroot: selinux_state not found\n");
-        return -EINVAL;
     }
-    WRITE_ONCE(selinux_state[0], false);
-    WRITE_ONCE(selinux_state[1], false);
-    pr_info("dfroot: selinux_state permissive (bytes 0+1 cleared)\n");
 
     // Samsung
     defex_enforce_kp = (struct kprobe){ .addr = (kprobe_opcode_t *)get_addr("task_defex_enforce"),

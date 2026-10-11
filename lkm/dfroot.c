@@ -839,34 +839,16 @@ static int __nocfi __init dfroot_init(void)
         pr_info("dfroot: cleared page cache for crash_dump64\n");
     }
 
-    // Make SELinux non-enforcing - through the coherent selinuxfs path.
-    //
-    // v1.18 cleared bytes 0/1 of selinux_state directly.  That unlocked the
-    // observation channels (kworker writes, dmesg, device reads all started
-    // working) but left the SELinux state internally inconsistent - getpeercon
-    // began failing ("Unable to set property ... getpeercon() failed") right
-    // when system_server crashed ~40s later.  A raw byte write bypasses the
-    // selinuxfs sync; the kernel's own enforcing switch does not.  So: write
-    // "0" to /sys/fs/selinux/enforce (mounted at boot, and the exact path
-    // `setenforce 0` uses) instead of poking the struct.
+    // SELinux is left untouched here.  v1.18's raw selinux_state byte write
+    // unlocked the observation channels but left the state incoherent (system
+    //_server crashed ~40s in); v1.19's coherent selinuxfs write ran inside the
+    // exploit's critical window and the exploit then failed two boots in a row.
+    // The enforcing toggle now happens in bootstrap (userspace, privileged
+    // domain, strictly after this module is loaded), which keeps this module
+    // out of both problems.
     selinux_state = (bool *)get_addr("selinux_state");
-    if (selinux_state) {
-        struct file *sf;
-        loff_t sfx_pos = 0;
-        static const char zero[] = "0";
-
-        sf = df_filp_open("/sys/fs/selinux/enforce", O_WRONLY, 0);
-        if (!IS_ERR(sf)) {
-            df_kernel_write(sf, zero, sizeof(zero) - 1, &sfx_pos);
-            filp_close(sf, NULL);
-            pr_info("dfroot: selinux enforce -> 0 via selinuxfs\n");
-        } else {
-            pr_warn("dfroot: selinuxfs enforce open failed (%ld)\n",
-                    PTR_ERR(sf));
-        }
-    } else {
-        pr_err("dfroot: selinux_state not found\n");
-    }
+    if (!selinux_state)
+        pr_warn("dfroot: selinux_state not found (unused now)\n");
 
     // Samsung
     defex_enforce_kp = (struct kprobe){ .addr = (kprobe_opcode_t *)get_addr("task_defex_enforce"),

@@ -455,6 +455,16 @@ static int disable_modules(void)
 
 int main(void)
 {
+    /* Make SELinux permissive through the official selinuxfs path, from this
+     * privileged context, strictly after dfroot.ko finished loading (module-
+     * init-time SELinux manipulation broke the exploit or the framework in
+     * v1.18/v1.19).  With enforcing off, the kernel's own kworker writes to
+     * /dev/dfm1 succeed and adb shell can read the live counters, dmesg and
+     * debugfs directly.  Best effort: if this domain lacks setenforce, the
+     * observation channels stay dark but everything else still works. */
+    run_ctx(NULL, (char *[]){ "/system/bin/sh", "-c",
+        "echo 0 > /sys/fs/selinux/enforce", NULL });
+
     touch("/dev/dfm1");
     char su_manager[256];
     int soft_reboot, disable_mods;

@@ -454,6 +454,9 @@ public class MainActivity extends AppCompatActivity implements IReporter {
             updateLogVisibility();
         });
         updateLogVisibility();
+        // After the whole screen is wired, so a headless run behaves exactly like
+        // one started from the Run button.
+        maybeRunHeadless();
 
         // Restore the simple status for the current state: rooted device or a
         // successful last run -> 100% + Verified; failed run -> Failed.
@@ -482,25 +485,7 @@ public class MainActivity extends AppCompatActivity implements IReporter {
             }
             runArmed = false;
             v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-            running = true;
-            binding.btnRun.setEnabled(false);
-            binding.btnRun.setText("Running");
-            // Same dark greyed-out styling as the Rooted state.
-            binding.btnRun.setTextColor(0xFF6E6E6E);
-            binding.btnRun.setBackgroundTintList(ColorStateList.valueOf(0xFF1F1F1F));
-            ((com.google.android.material.button.MaterialButton) binding.btnRun)
-                    .setStrokeColor(ColorStateList.valueOf(0xFF1F1F1F));
-            binding.outputView.setText("");
-            logBuffer.setLength(0);
-            if (lastLogFile.exists()) lastLogFile.delete();
-            createDeviceProtectedStorageContext()
-                    .getSharedPreferences("dfroot", MODE_PRIVATE)
-                    .edit().putBoolean("last_run_success", false).apply();
-            appendLog(LOG_HEADER);
-            binding.twoStep.reset();
-            setCompactButton(true, false);
-            updateLogVisibility();
-            mExec.execute(this::runExploit);
+            startRun();
         });
 
         binding.btnKsu.setOnClickListener(v -> {
@@ -752,6 +737,51 @@ public class MainActivity extends AppCompatActivity implements IReporter {
     /** Re-read the SU manager selection when returning to the app: the user may
      *  have installed or uninstalled a manager while we were in the background,
      *  and the Run button has to reflect that immediately. */
+    /** The single validation path shared by the Run button and the headless
+     *  trigger.  The two-step confirm exists to stop a mis-tap; a caller that
+     *  passes the intent extra has already asked for it explicitly. */
+    private void startRun() {
+        if (running) return;
+        running = true;
+        binding.btnRun.setEnabled(false);
+        binding.btnRun.setText("Running");
+        // Same dark greyed-out styling as the Rooted state.
+        binding.btnRun.setTextColor(0xFF6E6E6E);
+        binding.btnRun.setBackgroundTintList(ColorStateList.valueOf(0xFF1F1F1F));
+        ((com.google.android.material.button.MaterialButton) binding.btnRun)
+                .setStrokeColor(ColorStateList.valueOf(0xFF1F1F1F));
+        binding.outputView.setText("");
+        logBuffer.setLength(0);
+        if (lastLogFile.exists()) lastLogFile.delete();
+        createDeviceProtectedStorageContext()
+                .getSharedPreferences("dfroot", MODE_PRIVATE)
+                .edit().putBoolean("last_run_success", false).apply();
+        appendLog(LOG_HEADER);
+        binding.twoStep.reset();
+        setCompactButton(true, false);
+        updateLogVisibility();
+        mExec.execute(this::runExploit);
+    }
+
+    /** Headless entry point for automated verification.
+     *
+     *  Driving the two-step Run button over adb proved unreliable (the screen
+     *  re-locks and the USB-mode dialog steals focus), which made every device
+     *  test depend on hand-timing.  `am start ... --ez autorun_headless true`
+     *  now runs the same code path with no UI interaction.  Debug builds only;
+     *  it is gated on the extra, so normal launches are unaffected. */
+    private void maybeRunHeadless() {
+        android.content.Intent it = getIntent();
+        if (it == null || !it.getBooleanExtra("autorun_headless", false)) return;
+
+        final Context deCtx = createDeviceProtectedStorageContext();
+        boolean expert = deCtx.getSharedPreferences("dfroot", MODE_PRIVATE)
+                .getBoolean("expert_mode", false);
+        Log.i(TAG, "headless: requested, expert=" + expert);
+        appendLog("headless trigger: autorun_headless=true, expert=" + expert + "\n");
+        startRun();
+    }
+
     @Override
     protected void onResume() {
         super.onResume();

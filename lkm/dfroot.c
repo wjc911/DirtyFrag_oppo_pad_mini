@@ -308,16 +308,33 @@ static kernel_read_t   df_kernel_read;
  * userspace gate fails closed if any of them is not armed. There is no way to
  * pass a module parameter when the module is loaded through the page-cache
  * write primitive, so the escape hatches are file based:
- *   create /data/local/tmp/dfroot-enforce   -> force enforce on
- *   create /data/local/tmp/dfroot-audit-only -> force audit (never skip a body)
+ *   create /dev/dfroot-enforce    -> force enforce on
+ *   create /dev/dfroot-audit-only -> force audit (never skip a body)
  * audit-only exists so an evidence run can be taken without touching any guard
  * function body. */
 static int df_hook_enforce = 1;
 module_param_named(enforce, df_hook_enforce, int, 0444);
 MODULE_PARM_DESC(enforce, "1 = short-circuit the primary guard targets (default)");
 
-#define DF_ENFORCE_FLAG "/data/local/tmp/dfroot-enforce"
-#define DF_AUDIT_FLAG   "/data/local/tmp/dfroot-audit-only"
+/* Mode and bridge flags live in /dev, NOT /data/local/tmp.
+ *
+ * Measured on device: this module cannot open anything under /data/local/tmp.
+ * That path is shell_data_file and the kernel-context filp_open fails, so
+ * df_file_exists() returned 0 for every flag placed there. The consequences
+ * were silent and confusing:
+ *   - /data/local/tmp/dfroot-audit-only was ignored, so a run meant to be the
+ *     audit control came up "mode=enforce ... shorted=7/7" instead;
+ *   - /data/local/tmp/dfroot-umh was ignored, which is why the root bridge
+ *     never spawned in almost every run even when the flag existed.
+ * /dev is demonstrably writable and readable from this module (it creates
+ * /dev/dfm0, dfm1 and dfm4 there every boot).
+ *
+ * The trade-off is that an adb shell cannot create files in /dev (SELinux), so
+ * these are set from a root context instead: the app's own bootstrap, or a
+ * one-shot UMH. */
+#define DF_ENFORCE_FLAG "/dev/dfroot-enforce"
+#define DF_AUDIT_FLAG   "/dev/dfroot-audit-only"
+#define DF_UMH_FLAG     "/dev/dfroot-umh"
 
 static int df_file_exists(const char *path)
 {
@@ -588,7 +605,7 @@ static void df_live_tick(struct work_struct *w)
      * Spawning a usermodehelper and re-arming from the snapshot work item were
      * the two changes present when the device panicked (bootReason
      * kernel_panic,oops_-_cfi:_fatal_exception). The bridge already has its own
-     * one-shot spawn at load, gated behind /data/local/tmp/dfroot-umh, and that
+     * one-shot spawn at load, gated behind /dev/dfroot-umh, and that
      * interlock stays until the panic is understood.
      *
      * Re-arm only while under the tick budget: an unconditional re-arm is
@@ -671,10 +688,10 @@ static void df_umh_bridge(umh_setup_t umh_setup, umh_exec_t umh_exec)
      * treating it as one was a mistake. The root command channel stays opt-in
      * until the panic is understood.
      *
-     * Touch /data/local/tmp/dfroot-umh to enable it deliberately, for an
+     * Create /dev/dfroot-umh to enable it deliberately, for an
      * isolated A/B with the panic watched for. */
-    if (!df_file_exists("/data/local/tmp/dfroot-umh")) {
-        pr_info("dfroot: umh bridge disabled (no flag file)\n");
+    if (!df_file_exists(DF_UMH_FLAG)) {
+        pr_info("dfroot: umh bridge disabled (no %s)\n", DF_UMH_FLAG);
         return;
     }
     if (!umh_setup || !umh_exec)
@@ -991,7 +1008,7 @@ static int __nocfi __init dfroot_init(void)
 
     // Kernel-side observation bridge: kthreadd-parented, outside every app
     // cgroup, so the freezer that killed the bootstrap daemon can't reach it.
-    // Gated behind /data/local/tmp/dfroot-umh (panics without it, see the
+    // Gated behind /dev/dfroot-umh (panics without it, see the
     // interlock comment in df_umh_bridge).
     df_umh_bridge(umh_setup, umh_exec);
 

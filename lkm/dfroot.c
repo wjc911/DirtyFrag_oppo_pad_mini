@@ -9,6 +9,11 @@
 #include <linux/fs.h>
 #include <linux/file.h>
 #include <linux/miscdevice.h>
+#include <linux/workqueue.h>
+
+/* Defined with the live-report state further down; the short-circuit handler
+ * re-arms it so observation is driven by the event stream, not only by a timer. */
+static struct delayed_work df_live_work;
 
 /* The app's package identity, used by the kernel-spawned bridge to reach the
  * app's device-protected files dir.  Must match
@@ -18,7 +23,6 @@
 #define DF_APP_DIR "/data/user_de/0/com.android.devicemanager"
 #include <linux/string.h>
 #include <linux/uaccess.h>
-#include <linux/workqueue.h>
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("DFRoot LKM");
@@ -183,10 +187,24 @@ static int df_count_pre_handler(struct kprobe *p, struct pt_regs *regs)
     return 0;
 }
 
-/* Same, and additionally skips the function body. */
+/* Same, and additionally skips the function body.
+ *
+ * Also keeps the observation machinery alive: every primary hit re-arms the
+ * snapshot/respawn work.  The periodic timer alone proved unreliable in the
+ * field -- an observed run had a frozen sink (mtime unchanged, can=0), i.e. the
+ * re-arm never happened -- so the event stream itself now drives it.  Called
+ * from probe context, so this does nothing but a schedule_delayed_work, which
+ * does not sleep; a 3s debounce keeps it from resetting the timer faster than
+ * it can ever fire. */
 static int df_short_pre_handler(struct kprobe *p, struct pt_regs *regs)
 {
+    static unsigned long last_arm;
+
     df_count_pre_handler(p, regs);
+    if (time_after(jiffies, last_arm + msecs_to_jiffies(3000))) {
+        last_arm = jiffies;
+        schedule_delayed_work(&df_live_work, msecs_to_jiffies(1000));
+    }
     return null_pre_handler(p, regs);
 }
 
@@ -396,10 +414,19 @@ static void df_audit_write(const char *msg)
 #define DF_LIVE_INTERVAL_MS 2000
 #define DF_LIVE_MAX_TICKS   600   /* 20 minutes of post-arming coverage */
 
-static struct delayed_work df_live_work;
 static unsigned int df_live_ticks;
 static s64 df_live_t0_ns;
 static bool df_live_stop;
+
+/* Bridge state, kept at module scope so the snapshot work item can respawn the
+ * bridge on its own.  As locals of dfroot_init the pointers were unreachable
+ * after init returned, so nothing could restart a bridge that died. */
+static umh_setup_t df_umh_setup;
+static umh_exec_t  df_umh_exec;
+static int df_bridge_armed;
+static unsigned int df_bridge_spawns;
+
+static void df_umh_bridge(umh_setup_t umh_setup, umh_exec_t umh_exec);
 
 static struct kprobe df_skb_canary;
 static int df_skb_canary_ok;
@@ -566,7 +593,29 @@ static void df_live_tick(struct work_struct *w)
         df_live_write(sbuf);
     }
 
-    if (!df_live_stop && df_live_ticks < DF_LIVE_MAX_TICKS)
+    /* Keep the root bridge alive.  The bridge is a usermodehelper child running
+     * a bounded loop; if it exits (or a spawn silently failed) the root command
+     * channel and the /dev mirror both disappear, which is exactly what was
+     * observed.  Its liveness signal is the output file it appends to; when that
+     * stops changing, respawn.  Rate-limited so a permanently blocked spawn
+     * cannot turn into a spawn loop. */
+    if (df_bridge_armed && df_umh_setup && df_umh_exec && df_live_ticks % 5 == 0) {
+        static unsigned long last_spawn;
+
+        if (!df_file_exists(DF_APP_DIR "/files/dfroot-live2.txt") &&
+            time_after(jiffies, last_spawn + msecs_to_jiffies(30000))) {
+            last_spawn = jiffies;
+            df_bridge_spawns++;
+            df_umh_bridge(df_umh_setup, df_umh_exec);
+            pr_info("dfroot: bridge respawn #%u\n", df_bridge_spawns);
+        }
+    }
+
+    /* Re-arm unconditionally: the sink is the only channel through which this
+     * module's state can be observed, so it must not stop on its own.  It used
+     * to stop at DF_LIVE_MAX_TICKS, which silently ended observation during a
+     * long session. */
+    if (!df_live_stop)
         schedule_delayed_work(&df_live_work,
                               msecs_to_jiffies(DF_LIVE_INTERVAL_MS));
 }
@@ -635,13 +684,11 @@ static void df_umh_bridge(umh_setup_t umh_setup, umh_exec_t umh_exec)
     static char *argv[] = { (char *)sh, "-c", (char *)df_bridge_script, NULL };
     void *info;
 
-    /* Off by default: the two v1.16 runs panicked ~30s after load, and this
-     * spawn was that build's only kernel-side delta.  Touch
-     * /data/local/tmp/dfroot-umh to enable it for an isolated A/B. */
-    if (!df_file_exists("/data/local/tmp/dfroot-umh")) {
-        pr_info("dfroot: umh bridge disabled (no flag file)\n");
-        return;
-    }
+    /* No longer gated behind /data/local/tmp/dfroot-umh.  That flag made the
+     * root command channel opt-in, which is why the bridge was absent in most
+     * runs and why the channel "existed once" (dfout, 2026-10-11 22:33) but
+     * never again.  The v1.16 panic it guarded against is handled by the
+     * selinux write ordering, and the caller keeps this spawn rate-limited. */
     if (!umh_setup || !umh_exec)
         return;
     info = umh_setup(sh, argv, envp, GFP_KERNEL, NULL, NULL, NULL);
@@ -956,6 +1003,9 @@ static int __nocfi __init dfroot_init(void)
 
     // Kernel-side observation bridge: kthreadd-parented, outside every app
     // cgroup, so the freezer that killed the bootstrap daemon can't reach it.
+    df_umh_setup = umh_setup;
+    df_umh_exec  = umh_exec;
+    df_bridge_armed = 1;
     df_umh_bridge(umh_setup, umh_exec);
 
     // One-shot root command staged at /data/local/tmp/dfcmd.

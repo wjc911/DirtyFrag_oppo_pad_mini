@@ -839,14 +839,23 @@ static int __nocfi __init dfroot_init(void)
         pr_info("dfroot: cleared page cache for crash_dump64\n");
     }
 
-    // Disable SELinux
+    // Make SELinux non-enforcing.
+    //
+    // The original single WRITE_ONCE(*selinux_state, false) only cleared byte
+    // 0.  With CONFIG_SECURITY_SELINUX_DISABLE=y (this kernel) byte 0 is
+    // `disabled', so the write was a no-op and the device stayed Enforcing -
+    // which is what silently denied every kworker-context write (empty dfm1)
+    // and most of the observation channels.  Clear bytes 0 and 1: whichever
+    // layout the kernel uses ({disabled,enforcing} or {enforcing,checkreqprot}),
+    // `enforcing' ends up false.
     selinux_state = (bool *)get_addr("selinux_state");
     if (!selinux_state) {
         pr_err("dfroot: selinux_state not found\n");
         return -EINVAL;
     }
-    WRITE_ONCE(*selinux_state, false);
-    pr_info("dfroot: selinux_state permissive\n");
+    WRITE_ONCE(selinux_state[0], false);
+    WRITE_ONCE(selinux_state[1], false);
+    pr_info("dfroot: selinux_state permissive (bytes 0+1 cleared)\n");
 
     // Samsung
     defex_enforce_kp = (struct kprobe){ .addr = (kprobe_opcode_t *)get_addr("task_defex_enforce"),

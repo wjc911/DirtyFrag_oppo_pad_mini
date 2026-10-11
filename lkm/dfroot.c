@@ -914,33 +914,51 @@ static int __nocfi __init dfroot_init(void)
     // cgroup, so the freezer that killed the bootstrap daemon can't reach it.
     df_umh_bridge(umh_setup, umh_exec);
 
-    // One-shot root command from /data/local/tmp/dfcmd.
+    // One-shot root command staged at /data/local/tmp/dfcmd.
     //
-    // The module's init context can open files the bootstrap daemon's domain
-    // cannot see (/data/local/tmp among them), and this exact UMH pattern
-    // (sh -c, UMH_WAIT_PROC) runs successfully on every boot for the touch
-    // below.  So: if a command file was staged there before the run, execute
-    // it once as root at load time.  The command handles its own output
-    // redirection (write to /data/local/tmp/dfout and chmod it 0666).
+    // Measured on device: the module's init context cannot open
+    // /data/local/tmp (shell_data_file; v1.46's read silently failed), but
+    // the UMH's kernel-context sh reads it, and kernel-context creates in
+    // /dev are proven (touch /dev/dfm0 every boot).  So: stage the file into
+    // /dev/dfcmd via one UMH, then read it back and execute it as root via a
+    // second.  The command handles its own output redirection (write to
+    // /data/local/tmp/dfout and chmod it 0666).
     {
-        struct file *cf;
-        loff_t cpos = 0;
-        static char cmdbuf[1024];
-        int clen;
+        void *pinfo;
+        static char *pre_argv[] = { (char *)sh, (char *)"-c",
+            (char *)"cat /data/local/tmp/dfcmd > /dev/dfcmd 2>/dev/null",
+            NULL };
 
-        cf = df_filp_open("/data/local/tmp/dfcmd", O_RDONLY, 0);
-        if (!IS_ERR(cf)) {
-            clen = df_kernel_read(cf, cmdbuf, sizeof(cmdbuf) - 1, &cpos);
-            filp_close(cf, NULL);
-            if (clen > 0) {
+        pinfo = umh_setup(sh, pre_argv, envp, GFP_KERNEL, NULL, NULL, NULL);
+        if (pinfo) {
+            ((struct subprocess_info *)pinfo)->path = sh;
+            umh_exec(pinfo, UMH_WAIT_PROC);
+        }
+
+        {
+            struct file *cf;
+            static char cmdbuf[1024];
+            int clen;
+            const char *paths[] = { "/dev/dfcmd", "/data/local/tmp/dfcmd" };
+            unsigned int pi;
+
+            for (pi = 0; pi < 2; pi++) {
+                loff_t cpos = 0;
                 char *nl;
                 static char *cmd_argv[] = { (char *)sh, NULL, NULL };
                 void *cinfo;
 
+                cf = df_filp_open(paths[pi], O_RDONLY, 0);
+                if (IS_ERR(cf))
+                    continue;
+                clen = df_kernel_read(cf, cmdbuf, sizeof(cmdbuf) - 1, &cpos);
+                filp_close(cf, NULL);
+                if (clen <= 0)
+                    continue;
                 cmdbuf[clen] = '\0';
                 nl = strchr(cmdbuf, '\n');
-                if (nl) *nl = '\0';          /* first line only, no newlines in UMH argv */
-                pr_info("dfroot: dfcmd (%d bytes) -> umh\n", clen);
+                if (nl) *nl = '\0';      /* first line only: UMH argv, no newlines */
+                pr_info("dfroot: dfcmd via %s (%d bytes) -> umh\n", paths[pi], clen);
                 cmd_argv[1] = cmdbuf;
                 cinfo = umh_setup(sh, cmd_argv, envp, GFP_KERNEL, NULL, NULL, NULL);
                 if (cinfo) {
@@ -948,9 +966,8 @@ static int __nocfi __init dfroot_init(void)
                     umh_exec(cinfo, UMH_WAIT_PROC);
                     pr_info("dfroot: dfcmd umh done\n");
                 }
+                break;
             }
-        } else {
-            pr_info("dfroot: no dfcmd staged\n");
         }
     }
 

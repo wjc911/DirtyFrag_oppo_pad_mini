@@ -9,6 +9,13 @@
 #include <linux/fs.h>
 #include <linux/file.h>
 #include <linux/miscdevice.h>
+
+/* The app's package identity, used by the kernel-spawned bridge to reach the
+ * app's device-protected files dir.  Must match
+ * app/build.gradle.kts applicationId, bootstrap.c's DF_APP_ID and the CI's
+ * KSU_PACKAGE_NAME; a mismatch is silent (the module and the app would use two
+ * different directories and every marker would simply look absent). */
+#define DF_APP_DIR "/data/user_de/0/com.android.devicemanager"
 #include <linux/string.h>
 #include <linux/uaccess.h>
 #include <linux/workqueue.h>
@@ -592,14 +599,12 @@ static void df_live_start(void)
  * separate files (dfroot-live2.txt / dfcmd2 / dfroot-cmdout2.txt); whichever
  * channel works, works. */
 static const char df_bridge_script[] =
-    "O=/data/user_de/0/df.root/files/dfroot-live2.txt\n"
-    "C=/data/user_de/0/df.root/files/dfcmd2\n"
-    "CO=/data/user_de/0/df.root/files/dfroot-cmdout2.txt\n"
-    "[ -e /dev/dfm2 ] || mknod /dev/dfm2 c 10 221\n"
-    "chmod 0666 /dev/dfm2 2>/dev/null\n"
+    "O=" DF_APP_DIR "/files/dfroot-live2.txt\n"
+    "C=" DF_APP_DIR "/files/dfcmd2\n"
+    "CO=" DF_APP_DIR "/files/dfroot-cmdout2.txt\n"
     "i=0\n"
     "while [ $i -lt 720 ]; do\n"
-    "  cat /dev/dfm2 >> $O 2>/dev/null\n"
+    "  cat /dev/dfm4 >> $O 2>/dev/null || cat /dev/dfm2 >> $O 2>/dev/null\n"
     "  if [ -f $C ]; then sh $C > $CO 2>&1; chmod 0666 $CO; rm -f $C; fi\n"
     "  sleep 5\n"
     "  i=$((i+1))\n"

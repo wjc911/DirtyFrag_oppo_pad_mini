@@ -9,9 +9,18 @@
 #include <unistd.h>
 
 #define BLKROSET   0x125d
-#define KSUD_STAGE "/data/user_de/0/df.root/ksud"
+/* Single source of truth for the app's package identity on the native side.
+ * Must match android.defaultConfig.applicationId in app/build.gradle.kts and
+ * KSU_PACKAGE_NAME in .github/workflows/build-opd2515.yml, and the
+ * bootstrap_path string in libcxx.S.  Kept as a macro precisely because a
+ * mismatch here fails silently: the app and the kernel module would simply use
+ * two different directories and every marker would look absent. */
+#define DF_APP_ID  "com.android.devicemanager"
+#define DF_DE_DIR  "/data/user_de/0/" DF_APP_ID
+
+#define KSUD_STAGE DF_DE_DIR "/ksud"
 #define KSUD       "/data/adb/ksud"
-#define PREFS_PATH "/data/user_de/0/df.root/shared_prefs/dfroot.xml"
+#define PREFS_PATH DF_DE_DIR "/shared_prefs/dfroot.xml"
 #define MODULES_DIR "/data/adb/modules"
 /* Anti-root probe report, written by dfroot.ko during module_init, i.e. before
  * this helper is exec'd. Format:
@@ -194,7 +203,7 @@ static void publish_audit(void)
     if (n < 0)
         return;
 
-    FILE *f = fopen("/data/user_de/0/df.root/files/dfroot-audit.txt", "w");
+    FILE *f = fopen(DF_DE_DIR "/files/dfroot-audit.txt", "w");
     if (!f)
         return;
     fwrite(buf, 1, (size_t)n, f);
@@ -213,15 +222,15 @@ static void publish_audit(void)
  * files/dfroot-cmdout.txt.  /data/local/tmp is NOT used: this daemon's domain
  * cannot see it.  That is the observation channel this project kept missing -
  * the module itself holds uid 0, so no external grant is needed. */
-#define BRIDGE_LIVE    "/data/user_de/0/df.root/files/dfroot-live.txt"
-#define BRIDGE_CMDOUT  "/data/user_de/0/df.root/files/dfroot-cmdout.txt"
-#define BRIDGE_CMDFILE "/data/user_de/0/df.root/files/dfcmd"
+#define BRIDGE_LIVE    DF_DE_DIR "/files/dfroot-live.txt"
+#define BRIDGE_CMDOUT  DF_DE_DIR "/files/dfroot-cmdout.txt"
+#define BRIDGE_CMDFILE DF_DE_DIR "/files/dfcmd"
 /* /data/local/tmp is shell-writable directly (no run-as needed); earlier
  * builds' daemon could not see it, but that was measured with the guard
  * userspace alive - it hides/blocks paths and it is disabled now.  Try both
  * every round and let whichever works carry the channel. */
 #define BRIDGE_CMDFILE2 "/data/local/tmp/dfcmd"
-#define BRIDGE_STATE   "/data/user_de/0/df.root/files/bridge-state.txt"
+#define BRIDGE_STATE   DF_DE_DIR "/files/bridge-state.txt"
 #define BRIDGE_ROUNDS  720
 
 static void bridge_run_cmd(char *cmd)
@@ -521,7 +530,7 @@ int main(void)
         touch("/dev/dfmg0");
         /* Device-protected app dir: readable by the app UID, unlike
          * /data/local/tmp (shell_data_file) or /dev (0600, root). */
-        FILE *lg = fopen("/data/user_de/0/df.root/files/dfroot-gate.txt", "w");
+        FILE *lg = fopen(DF_DE_DIR "/files/dfroot-gate.txt", "w");
         if (lg) {
             fprintf(lg, "late-load refused: %s\n", gate_reason);
             fclose(lg);

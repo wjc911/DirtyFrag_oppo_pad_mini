@@ -455,14 +455,6 @@ static int disable_modules(void)
 
 int main(void)
 {
-    /* Sync the selinuxfs view of the enforcing switch dfroot.ko already
-     * flipped (byte0 of selinux_state).  Doing this HERE - not in module_init
-     * - matters twice over: a selinuxfs write inside the module load stalled
-     * the exploit (v1.19, v1.42), and only after the byte write is the
-     * selinuxfs write itself permitted.  Best effort either way. */
-    run_ctx(NULL, (char *[]){ "/system/bin/sh", "-c",
-        "echo 0 > /sys/fs/selinux/enforce", NULL });
-
     touch("/dev/dfm1");
     char su_manager[256];
     int soft_reboot, disable_mods;
@@ -525,5 +517,14 @@ int main(void)
     /* Keep the module resident when its probes are what suppresses the alert. */
     if (!late_load_resident)
         run_ctx(NULL, (char *[]){ "/system/bin/rmmod", "dfroot", NULL });
+
+    /* Sync the selinuxfs view of the enforcing switch dfroot.ko already
+     * flipped (byte0 of selinux_state), so getenforce stops lying.  LAST on
+     * purpose: a selinuxfs enforce write stalled the exploit twice when run
+     * inside the load window (v1.19 module_init, v1.43 bootstrap head) - here
+     * the exploit's marker watcher already has its dfm6/dfme2 verdict, so even
+     * if this write blocks, the root establishment is done. */
+    run_ctx(NULL, (char *[]){ "/system/bin/sh", "-c",
+        "echo 0 > /sys/fs/selinux/enforce", NULL });
     return 0;
 }

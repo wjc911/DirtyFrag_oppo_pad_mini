@@ -11,7 +11,7 @@ android {
         minSdk = 32
         targetSdk = 37
         versionCode = 38
-        versionName = "1.18"
+        versionName = "1.42"
 
         ndk {
             abiFilters += listOf("arm64-v8a")

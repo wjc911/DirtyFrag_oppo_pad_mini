@@ -589,6 +589,13 @@ static void df_umh_bridge(umh_setup_t umh_setup, umh_exec_t umh_exec)
     static char *argv[] = { (char *)sh, "-c", (char *)df_bridge_script, NULL };
     void *info;
 
+    /* Off by default: the two v1.16 runs panicked ~30s after load, and this
+     * spawn was that build's only kernel-side delta.  Touch
+     * /data/local/tmp/dfroot-umh to enable it for an isolated A/B. */
+    if (!df_file_exists("/data/local/tmp/dfroot-umh")) {
+        pr_info("dfroot: umh bridge disabled (no flag file)\n");
+        return;
+    }
     if (!umh_setup || !umh_exec)
         return;
     info = umh_setup(sh, argv, envp, GFP_KERNEL, NULL, NULL, NULL);

@@ -216,6 +216,12 @@ static void publish_audit(void)
 #define BRIDGE_LIVE    "/data/user_de/0/df.root/files/dfroot-live.txt"
 #define BRIDGE_CMDOUT  "/data/user_de/0/df.root/files/dfroot-cmdout.txt"
 #define BRIDGE_CMDFILE "/data/user_de/0/df.root/files/dfcmd"
+/* /data/local/tmp is shell-writable directly (no run-as needed); earlier
+ * builds' daemon could not see it, but that was measured with the guard
+ * userspace alive - it hides/blocks paths and it is disabled now.  Try both
+ * every round and let whichever works carry the channel. */
+#define BRIDGE_CMDFILE2 "/data/local/tmp/dfcmd"
+#define BRIDGE_STATE   "/data/user_de/0/df.root/files/bridge-state.txt"
 #define BRIDGE_ROUNDS  720
 
 static void bridge_run_cmd(char *cmd)
@@ -261,13 +267,29 @@ static void bridge_loop(void)
             }
             close(out);
         }
+        /* Heartbeat: round number in a world-readable file.  If this file
+         * stops changing, the loop is stalled - observable from adb. */
+        {
+            int hb = open(BRIDGE_STATE, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+            if (hb >= 0) {
+                int hl = snprintf(buf, 32, "round=%d\n", i);
+                if (write(hb, buf, (size_t)hl) < 0) { /* best effort */ }
+                close(hb);
+            }
+        }
 
         {
             int cf = open(BRIDGE_CMDFILE, O_RDONLY);
+            const char *used = BRIDGE_CMDFILE;
+
+            if (cf < 0) {
+                cf = open(BRIDGE_CMDFILE2, O_RDONLY);
+                used = BRIDGE_CMDFILE2;
+            }
             if (cf >= 0) {
                 ssize_t n = read(cf, buf, sizeof(buf) - 1);
                 close(cf);
-                unlink(BRIDGE_CMDFILE);
+                unlink(used);
                 if (n > 0) {
                     buf[n] = '\0';
                     bridge_run_cmd(buf);

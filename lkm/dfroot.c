@@ -406,12 +406,24 @@ static int df_canary_pre_handler(struct kprobe *p, struct pt_regs *regs)
     return 0;
 }
 
-/* Append-only sibling of df_audit_write: O_APPEND so consecutive snapshots
- * accumulate instead of clobbering.  NOTE: this runs from a kworker, and on
- * this device SELinux (still Enforcing - the selinux_state write does not
- * take) denies kworker-context writes to tmpfs, so the file stays empty.  It
- * is kept for kernels where it works; the readable path is the misc device
- * below, whose read handler runs in the *caller's* context. */
+/* Live snapshot sink: a plain tmpfs file, deliberately NOT the misc device.
+ *
+ * Why this exists: the previous instrument was the misc device /dev/dfm2, whose
+ * node misc_register() creates mode 0600 root:root.  "Read in the caller's
+ * context" therefore only helps callers that are already root -- an adb shell
+ * (uid 2000, u:r:shell:s0) is refused by SELinux -- and /dev/dfm1 never contains
+ * anything, because kworker-context writes to tmpfs are denied while the kernel
+ * stays Enforcing (the selinux_state write does not take).  The net effect was
+ * that the module's own counters were unreadable by the party trying to verify
+ * them.
+ *
+ * A regular file created 0666 in /dev is created by *this module* (root, kernel
+ * context) and stays readable afterwards with `adb shell cat`, exactly like
+ * /dev/dfm0.  Each tick truncates and rewrites the whole snapshot, so whatever
+ * is on disk is self-describing: the LIVE line carries t= and n=, letting a
+ * reader tell fresh from stale. */
+#define DF_LIVE_PATH "/dev/dfm4"
+
 static void df_live_write(const char *msg)
 {
     struct file *f;
@@ -419,7 +431,7 @@ static void df_live_write(const char *msg)
 
     if (!df_filp_open || !df_kernel_write)
         return;
-    f = df_filp_open("/dev/dfm1", O_WRONLY | O_CREAT | O_APPEND, 0666);
+    f = df_filp_open(DF_LIVE_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0666);
     if (IS_ERR(f))
         return;
     df_kernel_write(f, msg, strlen(msg), &pos);
@@ -554,6 +566,15 @@ static void df_live_start(void)
     df_live_t0_ns = ktime_get_boottime();
     INIT_DELAYED_WORK(&df_live_work, df_live_tick);
     schedule_delayed_work(&df_live_work, msecs_to_jiffies(DF_LIVE_INTERVAL_MS));
+
+    /* Publish a snapshot immediately as well, so the readable sink exists from
+     * the moment arming completes rather than only after the first 2s tick. */
+    {
+        static char boot[2048];
+
+        df_live_format(boot, sizeof(boot));
+        df_live_write(boot);
+    }
 
     df_live_misc_ok = misc_register(&df_live_dev) == 0;
     if (!df_live_misc_ok)

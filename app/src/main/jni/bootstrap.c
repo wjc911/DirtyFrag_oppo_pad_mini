@@ -255,7 +255,12 @@ static void bridge_loop(void)
         int out = open(BRIDGE_LIVE, O_WRONLY | O_CREAT | O_APPEND, 0666);
 
         if (out >= 0) {
-            int fd = open("/dev/dfm2", O_RDONLY);
+            /* Prefer the plain-file sink: it is readable by an adb shell too, and
+             * unlike the misc device it exists regardless of who is reading. */
+            int fd = open("/dev/dfm4", O_RDONLY);
+
+            if (fd < 0)
+                fd = open("/dev/dfm2", O_RDONLY);
 
             if (fd >= 0) {
                 ssize_t n = read(fd, buf, sizeof(buf) - 1);

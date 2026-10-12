@@ -147,18 +147,23 @@ jobs:
           fi
           keytool -list -keystore app/keystore.jks -storepass dirtyfrag | grep -i 'fingerprint' || true
       - name: Publish keystore (one-shot bootstrap of the pinned key)
+        id: pubkey
         run: |
+          # `if:` cannot read secrets, so the decision is made here and surfaced
+          # as an output for the upload step.
           if [ -n "${{ secrets.DIRTYFRAG_KEYSTORE_B64 }}" ]; then
             echo "pinned key already configured; nothing to publish"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
           else
             base64 -w0 app/keystore.jks > keystore.b64
             echo "publishing the generated key so it can be pinned as"
             echo "DIRTYFRAG_KEYSTORE_B64; download this artifact once, set the"
-            echo "secret, then this step's artifact becomes redundant."
+            echo "secret, then this step becomes dormant."
             sha256sum app/keystore.jks
+            echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
       - uses: actions/upload-artifact@v4
-        if: ${{ secrets.DIRTYFRAG_KEYSTORE_B64 == '' }}
+        if: steps.pubkey.outputs.publish == 'true'
         with:
           name: keystore-to-pin
           path: keystore.b64

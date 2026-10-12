@@ -122,8 +122,30 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-      - name: Create ephemeral signing key
-        run: keytool -genkeypair -v -keystore app/keystore.jks -storepass dirtyfrag -keypass dirtyfrag -alias dirtyfrag -dname 'CN=DirtyFrag' -keyalg RSA -keysize 2048 -validity 3650 -noprompt
+      - name: Install signing key
+        env:
+          KEYSTORE_B64: ${{ secrets.DIRTYFRAG_KEYSTORE_B64 }}
+        run: |
+          # A PINNED key, not a fresh one per run.
+          #
+          # This step used to keytool a brand-new keystore on every build, so
+          # every artifact carried a different signature. Android will not
+          # replace an installed app whose signature differs, so each install
+          # became uninstall + reinstall, and the OPPO installer demands a manual
+          # confirmation tap for that -- which cannot be automated because the
+          # installer filters injected input. That is why every device test
+          # suddenly needed a human.
+          #
+          # With a stable key, installing over the same package is a silent
+          # in-place upgrade again.
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > app/keystore.jks
+            echo "signing with the pinned keystore from secrets"
+          else
+            echo "::warning::DIRTYFRAG_KEYSTORE_B64 is unset; generating a throwaway key, so this artifact will need uninstall+reinstall."
+            keytool -genkeypair -v -keystore app/keystore.jks -storepass dirtyfrag -keypass dirtyfrag -alias dirtyfrag -dname 'CN=DirtyFrag' -keyalg RSA -keysize 2048 -validity 3650 -noprompt
+          fi
+          keytool -list -keystore app/keystore.jks -storepass dirtyfrag | grep -i 'fingerprint' || true
       - uses: gradle/actions/setup-gradle@v4
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug

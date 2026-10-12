@@ -42,6 +42,18 @@ android {
             storePassword = "dirtyfrag"
             keyAlias = "dirtyfrag"
             keyPassword = "dirtyfrag"
+            /* No APK Signature Scheme v3 key rotation, and no v4.
+             *
+             * With v3 rotation enabled, each debug build signs with a fresh
+             * rotation key and carries a rotation lineage. The signing
+             * certificate can then be byte-identical between two artifacts while
+             * Android still refuses the update:
+             *   INSTALL_FAILED_UPDATE_INCOMPATIBLE: Existing package
+             *   com.sysupdate.helper signatures do not match newer version
+             * which is what happened even after the keystore itself was pinned.
+             * v2 only keeps one stable signer, so installs replace in place. */
+            enableV3Signing = false
+            enableV4Signing = false
         }
     }
 

@@ -576,9 +576,16 @@ int main(void)
      * never invoked" from "invoked and short-circuited" - the exact ambiguity
      * that made an earlier suppression conclusion unprovable.
      *
-     * This child runs as root (bootstrap's context), so it can read /dev/dfm4,
-     * and parks the result where an adb shell can read it. It deliberately
-     * outlives the load window so it samples AFTER the guard has fired. */
+     * This child runs as root (bootstrap's context), so it can read the misc
+     * device, and parks the result where an adb shell can read it. It
+     * deliberately outlives the load window so it samples AFTER the guard has
+     * fired.
+     *
+     * Read /dev/dfm2 (the misc device), NOT /dev/dfm4. dfm4 is a plain file the
+     * module only rewrites from its periodic work item, which never runs on this
+     * kernel; sampling it just returns the arming-time zero snapshot over and
+     * over. The misc device formats the counters in the READER's context, so a
+     * read here yields the live values. */
     {
         pid_t p = fork();
 
@@ -593,7 +600,9 @@ int main(void)
                  * reacted, otherwise it is just the arming-time zero snapshot
                  * again and proves nothing. */
                 usleep(3000 * 1000);
-                in = open("/dev/dfm4", O_RDONLY);
+                in = open("/dev/dfm2", O_RDONLY);
+                if (in < 0)
+                    in = open("/dev/dfm4", O_RDONLY);
                 if (in < 0)
                     continue;
                 {

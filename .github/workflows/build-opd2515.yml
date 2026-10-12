@@ -122,51 +122,26 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-      - name: Install signing key
-        env:
-          KEYSTORE_B64: ${{ secrets.DIRTYFRAG_KEYSTORE_B64 }}
+      - name: Verify signing key
         run: |
-          # A PINNED key, not a fresh one per run.
+          # The key is COMMITTED at app/keystore.jks and must stay byte-identical
+          # across builds.
           #
-          # This step used to keytool a brand-new keystore on every build, so
-          # every artifact carried a different signature. Android will not
-          # replace an installed app whose signature differs, so each install
-          # became uninstall + reinstall, and the OPPO installer demands a manual
-          # confirmation tap for that -- which cannot be automated because the
-          # installer filters injected input. That is why every device test
-          # suddenly needed a human.
+          # This step used to keytool -genkeypair a brand-new keystore every run,
+          # so each artifact had a different signature. Android refuses to replace
+          # an installed app whose signature differs, so every install became
+          # uninstall + reinstall, and the OPPO installer demands a manual tap for
+          # that (it filters injected input). That is why device testing started
+          # needing a human for every round.
           #
-          # With a stable key, installing over the same package is a silent
-          # in-place upgrade again.
-          if [ -n "$KEYSTORE_B64" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > app/keystore.jks
-            echo "signing with the pinned keystore from secrets"
-          else
-            echo "::warning::DIRTYFRAG_KEYSTORE_B64 is unset; generating a throwaway key, so this artifact will need uninstall+reinstall."
-            keytool -genkeypair -v -keystore app/keystore.jks -storepass dirtyfrag -keypass dirtyfrag -alias dirtyfrag -dname 'CN=DirtyFrag' -keyalg RSA -keysize 2048 -validity 3650 -noprompt
-          fi
+          # Routing the key through a secret was not enough: two runs reported the
+          # same certificate fingerprint and the second still failed to install
+          # over the first with INSTALL_FAILED_UPDATE_INCOMPATIBLE. A file in the
+          # repository cannot vary between runs, which removes that variable
+          # entirely.
+          test -f app/keystore.jks || { echo "::error::app/keystore.jks is missing"; exit 1; }
+          sha256sum app/keystore.jks
           keytool -list -keystore app/keystore.jks -storepass dirtyfrag | grep -i 'fingerprint' || true
-      - name: Publish keystore (one-shot bootstrap of the pinned key)
-        id: pubkey
-        run: |
-          # `if:` cannot read secrets, so the decision is made here and surfaced
-          # as an output for the upload step.
-          if [ -n "${{ secrets.DIRTYFRAG_KEYSTORE_B64 }}" ]; then
-            echo "pinned key already configured; nothing to publish"
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-          else
-            base64 -w0 app/keystore.jks > keystore.b64
-            echo "publishing the generated key so it can be pinned as"
-            echo "DIRTYFRAG_KEYSTORE_B64; download this artifact once, set the"
-            echo "secret, then this step becomes dormant."
-            sha256sum app/keystore.jks
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          fi
-      - uses: actions/upload-artifact@v4
-        if: steps.pubkey.outputs.publish == 'true'
-        with:
-          name: keystore-to-pin
-          path: keystore.b64
       - uses: gradle/actions/setup-gradle@v4
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug

@@ -39,3 +39,7 @@ app/src/main/jni/ko/*.ko
 # staged release APK for the GitHub release asset
 /release/
 __pycache__/
+# The debug signing key is committed on purpose: it must be identical for every
+# build, or Android refuses to replace the installed app and the OPPO installer
+# demands a manual tap for the uninstall+reinstall.
+!app/keystore.jks

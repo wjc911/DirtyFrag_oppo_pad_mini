@@ -171,8 +171,15 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-      - name: Create ephemeral signing key
-        run: keytool -genkeypair -v -keystore app/keystore.jks -storepass dirtyfrag -keypass dirtyfrag -alias dirtyfrag -dname 'CN=DirtyFrag' -keyalg RSA -keysize 2048 -validity 3650 -noprompt
+      - name: Verify signing key
+        run: |
+          # Same committed key as the other job -- see the comment there. This
+          # step must NOT generate a key: app/keystore.jks is tracked, and
+          # keytool -genkeypair fails outright when the alias already exists
+          # ("Key pair not generated, alias <dirtyfrag> already exists").
+          test -f app/keystore.jks || { echo "::error::app/keystore.jks is missing"; exit 1; }
+          sha256sum app/keystore.jks
+          keytool -list -keystore app/keystore.jks -storepass dirtyfrag | grep -i 'fingerprint' || true
       - uses: gradle/actions/setup-gradle@v4
       - name: Build debug APK with the tracked KernelSU daemon
         run: ./gradlew :app:assembleDebug

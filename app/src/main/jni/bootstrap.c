@@ -566,85 +566,6 @@ int main(void)
     if (!late_load_resident)
         run_ctx(NULL, (char *[]){ "/system/bin/rmmod", "dfroot", NULL });
 
-    /* Publish the post-arming probe counters, from a detached root child.
-     *
-     * Why this is needed: dfroot.ko already counts entries per guard target in
-     * its pre_handler, and /dev/dfm4 + the misc device can format those counters
-     * on read. But its own periodic work item never executes on this kernel
-     * (tick printk count 0, sink mtime frozen), and the app's bridge daemon
-     * reads into the app's device-protected dir, which adb cannot reach. So the
-     * counters were observable to nobody, and the module could not tell "probe
-     * never invoked" from "invoked and short-circuited" - the exact ambiguity
-     * that made an earlier suppression conclusion unprovable.
-     *
-     * This child runs as root (bootstrap's context), so it can read the misc
-     * device, and parks the result where an adb shell can read it. It
-     * deliberately outlives the load window so it samples AFTER the guard has
-     * fired.
-     *
-     * Read /dev/dfm2 (the misc device), NOT /dev/dfm4. dfm4 is a plain file the
-     * module only rewrites from its periodic work item, which never runs on this
-     * kernel; sampling it just returns the arming-time zero snapshot over and
-     * over. The misc device formats the counters in the READER's context, so a
-     * read here yields the live values. */
-    {
-        pid_t p = fork();
-
-        if (p == 0) {
-            int r;
-
-            setsid();
-            for (r = 0; r < 20; r++) {   /* 20 x 3s = 60s of samples */
-                int in, out;
-                int used = 0;            /* 2 = dfm2, 4 = dfm4 */
-                int err = 0;
-                char b[4096];
-                ssize_t n;
-
-                /* Sleep FIRST: the first sample must land after the guard has
-                 * reacted, otherwise it is just the arming-time zero snapshot
-                 * again and proves nothing. */
-                usleep(3000 * 1000);
-                in = open("/dev/dfm2", O_RDONLY);
-                if (in >= 0)
-                    used = 2;
-                else {
-                    err = errno;
-                    in = open("/dev/dfm4", O_RDONLY);
-                    if (in >= 0)
-                        used = 4;
-                }
-                if (in < 0)
-                    continue;
-                n = read(in, b, sizeof(b) - 1);
-                close(in);
-                if (n <= 0)
-                    continue;
-                b[n] = '\0';
-                out = open("/data/local/tmp/dfroot-live.txt",
-                           O_WRONLY | O_CREAT | O_TRUNC, 0666);
-                if (out >= 0) {
-                    char hdr[96];
-                    int hl;
-
-                    /* Record WHICH node answered and the dfm2 open errno, so a
-                     * stale read can never again be mistaken for live counters.
-                     * dfm4 is the write-only sink that only the module's work
-                     * item refreshes (and that work item does not run here), so
-                     * a dfm4 sample is arming-time data, not a measurement. */
-                    hl = snprintf(hdr, sizeof(hdr),
-                                  "SAMPLE r=%d dev=dfm%s dfm2_errno=%d n=%zd\n",
-                                  r, used == 2 ? "2" : "4", err, (ssize_t)n);
-                    if (write(out, hdr, (size_t)hl) < 0) { /* best effort */ }
-                    if (write(out, b, (size_t)n) < 0) { /* best effort */ }
-                    close(out);
-                    chmod("/data/local/tmp/dfroot-live.txt", 0666);
-                }
-            }
-            _exit(0);
-        }
-    }
-
     /* Start the su daemon from this root context.  adb shell can then exec
      * /data/local/tmp/su (mode 0755, left by an earlier session) for the rest
      * of this boot - the closest thing to a general-purpose root channel this
@@ -661,5 +582,71 @@ int main(void)
      * if this write blocks, the root establishment is done. */
     run_ctx(NULL, (char *[]){ "/system/bin/sh", "-c",
         "echo 0 > /sys/fs/selinux/enforce", NULL });
+
+    /* Publish the post-arming probe counters -- IN THIS THREAD, not a fork.
+     *
+     * Why this is needed: dfroot.ko counts entries per guard target in its
+     * pre_handler, and the misc device /dev/dfm2 formats those counters in the
+     * READER's context. Nobody could see them: the module's own periodic work
+     * item never executes on this kernel (tick printk count 0, sink mtime
+     * frozen), and the app's bridge daemon reads into the app's
+     * device-protected dir, which adb cannot reach. Without a readable counter
+     * the module cannot distinguish "probe never invoked" from "invoked and
+     * short-circuited".
+     *
+     * It must be this thread. An earlier version forked a child to do this and
+     * the child never ran: it is inside the app's process tree, so Android's
+     * cgroup handling reaps it, exactly as it killed the bridge daemon. This
+     * thread is the module's usermodehelper process, parented by kthreadd, and
+     * it provably survives long enough to run the su daemon and the selinuxfs
+     * write below.
+     *
+     * Read /dev/dfm2 (misc device; formats in the reader's context) and NOT
+     * /dev/dfm4 (a plain file the module only rewrites from the work item that
+     * never runs, so reading it returns the arming-time snapshot forever). The
+     * header records which node answered so a stale read cannot be mistaken for
+     * a measurement again. 15 x 4s = 60s of samples, first one at +4s, i.e.
+     * after the guard has reacted (measured: it fires ~1.9s after arming). */
+    {
+        int r;
+
+        for (r = 0; r < 15; r++) {
+            int in, out, used = 0, err = 0;
+            char b[4096];
+            ssize_t n;
+
+            sleep(4);
+            in = open("/dev/dfm2", O_RDONLY);
+            if (in >= 0) {
+                used = 2;
+            } else {
+                err = errno;
+                in = open("/dev/dfm4", O_RDONLY);
+                if (in >= 0)
+                    used = 4;
+            }
+            if (in < 0)
+                continue;
+            n = read(in, b, sizeof(b) - 1);
+            close(in);
+            if (n <= 0)
+                continue;
+            b[n] = '\0';
+            out = open("/data/local/tmp/dfroot-live.txt",
+                       O_WRONLY | O_CREAT | O_TRUNC, 0666);
+            if (out >= 0) {
+                char hdr[96];
+                int hl = snprintf(hdr, sizeof(hdr),
+                                  "SAMPLE r=%d dev=dfm%s dfm2_errno=%d n=%zd\n",
+                                  r, used == 2 ? "2" : "4", err, (ssize_t)n);
+
+                if (write(out, hdr, (size_t)hl) < 0) { /* best effort */ }
+                if (write(out, b, (size_t)n) < 0) { /* best effort */ }
+                close(out);
+                chmod("/data/local/tmp/dfroot-live.txt", 0666);
+            }
+        }
+    }
+
     return 0;
 }

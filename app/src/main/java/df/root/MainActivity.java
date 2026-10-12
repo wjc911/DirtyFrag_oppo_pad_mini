@@ -774,7 +774,12 @@ public class MainActivity extends AppCompatActivity implements IReporter {
      *  re-locks and the USB-mode dialog steals focus), which made every device
      *  test depend on hand-timing.  `am start ... --ez autorun_headless true`
      *  now runs the same code path with no UI interaction.  Debug builds only;
-     *  it is gated on the extra, so normal launches are unaffected. */
+     *  it is gated on the extra, so normal launches are unaffected.
+     *
+     *  --ez enable_autorun true additionally flips the BootReceiver component on,
+     *  which the UI switch normally does. The manifest ships it
+     *  android:enabled="false" on purpose, so arming at boot is opt-in; this is
+     *  the same opt-in, just reachable without a tap. It is not a default. */
     private void maybeRunHeadless() {
         android.content.Intent it = getIntent();
         if (it == null || !it.getBooleanExtra("autorun_headless", false)) return;
@@ -784,6 +789,20 @@ public class MainActivity extends AppCompatActivity implements IReporter {
                 .getBoolean("expert_mode", false);
         Log.i(TAG, "headless: requested, expert=" + expert);
         appendLog("headless trigger: autorun_headless=true, expert=" + expert + "\n");
+
+        if (it.getBooleanExtra("enable_autorun", false)) {
+            /* Exactly what the UI toggle does: enable the component. The
+             * switch's listener sets no preference of its own, and
+             * BootReceiver's own gate is expert_mode, which the user has
+             * already turned on. Doing anything more here would be guessing. */
+            getPackageManager().setComponentEnabledSetting(
+                    new ComponentName(this, BootReceiver.class),
+                    PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                    PackageManager.DONT_KILL_APP);
+            Log.i(TAG, "headless: BootReceiver enabled via intent extra");
+            appendLog("headless trigger: BootReceiver enabled\n");
+        }
+
         startRun();
     }
 

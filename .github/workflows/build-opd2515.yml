@@ -146,6 +146,22 @@ jobs:
             keytool -genkeypair -v -keystore app/keystore.jks -storepass dirtyfrag -keypass dirtyfrag -alias dirtyfrag -dname 'CN=DirtyFrag' -keyalg RSA -keysize 2048 -validity 3650 -noprompt
           fi
           keytool -list -keystore app/keystore.jks -storepass dirtyfrag | grep -i 'fingerprint' || true
+      - name: Publish keystore (one-shot bootstrap of the pinned key)
+        run: |
+          if [ -n "${{ secrets.DIRTYFRAG_KEYSTORE_B64 }}" ]; then
+            echo "pinned key already configured; nothing to publish"
+          else
+            base64 -w0 app/keystore.jks > keystore.b64
+            echo "publishing the generated key so it can be pinned as"
+            echo "DIRTYFRAG_KEYSTORE_B64; download this artifact once, set the"
+            echo "secret, then this step's artifact becomes redundant."
+            sha256sum app/keystore.jks
+          fi
+      - uses: actions/upload-artifact@v4
+        if: ${{ secrets.DIRTYFRAG_KEYSTORE_B64 == '' }}
+        with:
+          name: keystore-to-pin
+          path: keystore.b64
       - uses: gradle/actions/setup-gradle@v4
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug

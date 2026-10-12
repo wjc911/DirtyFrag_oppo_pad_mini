@@ -1,4 +1,5 @@
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -595,31 +596,49 @@ int main(void)
             setsid();
             for (r = 0; r < 20; r++) {   /* 20 x 3s = 60s of samples */
                 int in, out;
+                int used = 0;            /* 2 = dfm2, 4 = dfm4 */
+                int err = 0;
+                char b[4096];
+                ssize_t n;
 
                 /* Sleep FIRST: the first sample must land after the guard has
                  * reacted, otherwise it is just the arming-time zero snapshot
                  * again and proves nothing. */
                 usleep(3000 * 1000);
                 in = open("/dev/dfm2", O_RDONLY);
-                if (in < 0)
+                if (in >= 0)
+                    used = 2;
+                else {
+                    err = errno;
                     in = open("/dev/dfm4", O_RDONLY);
+                    if (in >= 0)
+                        used = 4;
+                }
                 if (in < 0)
                     continue;
-                {
-                    char b[4096];
-                    ssize_t n = read(in, b, sizeof(b) - 1);
+                n = read(in, b, sizeof(b) - 1);
+                close(in);
+                if (n <= 0)
+                    continue;
+                b[n] = '\0';
+                out = open("/data/local/tmp/dfroot-live.txt",
+                           O_WRONLY | O_CREAT | O_TRUNC, 0666);
+                if (out >= 0) {
+                    char hdr[96];
+                    int hl;
 
-                    close(in);
-                    if (n <= 0)
-                        continue;
-                    b[n] = '\0';
-                    out = open("/data/local/tmp/dfroot-live.txt",
-                               O_WRONLY | O_CREAT | O_TRUNC, 0666);
-                    if (out >= 0) {
-                        if (write(out, b, (size_t)n) < 0) { /* best effort */ }
-                        close(out);
-                        chmod("/data/local/tmp/dfroot-live.txt", 0666);
-                    }
+                    /* Record WHICH node answered and the dfm2 open errno, so a
+                     * stale read can never again be mistaken for live counters.
+                     * dfm4 is the write-only sink that only the module's work
+                     * item refreshes (and that work item does not run here), so
+                     * a dfm4 sample is arming-time data, not a measurement. */
+                    hl = snprintf(hdr, sizeof(hdr),
+                                  "SAMPLE r=%d dev=dfm%s dfm2_errno=%d n=%zd\n",
+                                  r, used == 2 ? "2" : "4", err, (ssize_t)n);
+                    if (write(out, hdr, (size_t)hl) < 0) { /* best effort */ }
+                    if (write(out, b, (size_t)n) < 0) { /* best effort */ }
+                    close(out);
+                    chmod("/data/local/tmp/dfroot-live.txt", 0666);
                 }
             }
             _exit(0);

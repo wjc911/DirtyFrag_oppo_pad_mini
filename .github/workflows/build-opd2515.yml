@@ -132,12 +132,10 @@ jobs:
           name: DirtyFrag-OPD2515-debug
           path: app/build/outputs/apk/debug/dirtyfrag.apk
 
-  # This path is intentionally independent of the custom ksud compile.  It
-  # produces a testable APK as soon as the exact OPD module is available,
-  # while the custom-package ksud job is still being diagnosed.  The bundled
-  # official manager binary may require a separate KernelSU manager package;
-  # this artifact is therefore a compatibility probe, not proof of one-APK
-  # operation.
+  # This path is intentionally independent of the custom ksud compile. It
+  # produces a testable APK as soon as the exact OPD module is available by
+  # using the tracked bundled daemon. Build success still does not replace
+  # device-side acceptance of the one-APK flow.
   build-opd-apk-bundled:
     needs: build-opd-module
     runs-on: ubuntu-latest

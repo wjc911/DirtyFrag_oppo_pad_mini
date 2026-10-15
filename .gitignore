@@ -21,6 +21,7 @@ apk/
 lkm/*.cmd
 lkm/*.o.d
 lkm/*.o
+lkm/*.ko
 lkm/*.mod
 lkm/*.mod.c
 lkm/*.lto.o

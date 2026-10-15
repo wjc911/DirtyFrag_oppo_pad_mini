@@ -3,24 +3,23 @@
 > **OPD2515 build:** this account fork targets OPPO Pad Mini `OPD2515` running exactly
 > `6.12.58-android16-6-g7704a1ae279b-ab15213644-4k`. CI rebuilds `dfroot.ko`
 > against the matching Android common kernel commit and packages the matching
-> KernelSU userspace daemon into the APK. One on-device cold-boot test confirmed
-> root returned after restart without ADB. This result is device/kernel-specific;
-> revalidate after any system update.
+> KernelSU userspace daemon into the APK. A successful build is not a device
+> acceptance result; revalidate after any system update.
 
 DirtyFrag is a hardened fork of [diabl0w/DFRoot](https://github.com/diabl0w/DFRoot). It exploits
 CVE-2026-43284 (DirtyFrag), a kernel page cache write primitive, to load a kernel module without an
-unlocked bootloader and without a custom kernel. The fork targets Samsung phones (OneUI, RKP and KDP
-hardening) and keeps upstream's SU-manager agnostic design.
+unlocked bootloader and without a custom kernel. This fork keeps the upstream Samsung compatibility
+hooks and adds an OPD2515-specific target, build, and KernelSU packaging path.
 
 > [!IMPORTANT]
-> Root is **ephemeral**. The kernel module, `su` and any loaded modules are gone the moment the
-> device reboots. A reboot always returns the phone to a clean, unrooted state - which is also the
-> recovery path if a run goes wrong.
+> Root is **ephemeral by design**. The kernel module, `su` and any loaded modules are intended to be
+> gone after a full reboot. This behavior must be verified on the target device for each candidate.
 
 ## Install
 
 1. Install the DirtyFrag APK from [Releases](https://github.com/wjc911/DirtyFrag_oppo_pad_mini/releases/latest).
-2. Install an SU manager that **ships `libksud.so`**:
+2. The OPD2515 build includes a bundled KernelSU userspace daemon and can use it without a second
+   application. An external SU manager that **ships `libksud.so`** can also be selected:
    - Samsung - **required**:
      - [diabl0w's KernelSU for Samsung, samsung-v1.0](https://github.com/diabl0w/KernelSU/releases/tag/samsung-v1.0) -
        bundles `libksud.so` and carries the Samsung KDP/DEFEX kernel support. On a Samsung phone
@@ -30,21 +29,19 @@ hardening) and keeps upstream's SU-manager agnostic design.
      - [KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next/releases/latest)
      - [KowSU](https://github.com/KOWX712/KernelSU/releases/latest)
      - [BakaSU](https://github.com/Baka-SU/BakaSU/releases/latest) (formerly ReSukiSU)
-3. Open DirtyFrag, pick your manager in the **SU Manager** card, then press **Run exploit**.
+3. Open DirtyFrag, leave **Built-in KernelSU daemon** selected or pick an external manager in the
+   **SU Manager** card, then press **Run exploit**.
 
-> [!WARNING]
-> Since 1.10 (upstream 3.2) DirtyFrag no longer bundles `ksud` - it is staged from the selected
-> manager's own `libksud.so`. A manager that does not ship that library cannot give you root. The
-> older advice to install a CI / Actions build of the manager no longer applies.
-
-A fresh install of DirtyFrag gets a new Android UID, so the grant in the manager has to be given
-again after every reinstall.
+When using an external manager, a fresh install of DirtyFrag gets a new Android UID, so its grant has
+to be given again after every reinstall.
 
 <img width="540" height="1170" alt="Screenshot_20261007_224642" src="https://github.com/user-attachments/assets/b12c72e3-05de-44d1-ad9f-251672370d8b" />
 
 ## Features
 
 - Choose your SU manager inside the app
+- Bundled KernelSU daemon on the OPD2515 path; an external manager remains optional
+- OPD2515 guard audit in the kernel log; the default mode observes targets without short-circuiting them
 - **Autorun** (start on boot), gated behind Expert mode, with a failed-run interlock that disables
   itself after a failed attempt so a bad run cannot boot-loop you
 - **Auto reboot** (soft reboot) - since 1.11 (upstream 4.1) this works with every KernelSU
@@ -110,12 +107,10 @@ keytool -genkeypair -v -keystore app/keystore.jks -alias dirtyfrag \
   -storepass dirtyfrag -keypass dirtyfrag
 ```
 
-The eight prebuilt kernel modules are committed under `app/src/main/jni/ko/`. Upstream gitignores
-them and builds them per-KMI in CI; this fork commits them so a plain clone builds without a DDK
-toolchain. They are built by this repo's `Build` workflow (the `LKMs / <kmi>` jobs) from the
-current `lkm/dfroot.c`, so they must be rebuilt whenever that file changes: run the workflow,
-download the `df-lkm-<kmi>` artifacts and drop them in this directory. To build them yourself
-instead, use upstream's `make` / podman DDK flow.
+The prebuilt kernel modules are committed under `app/src/main/jni/ko/`. The OPD2515 module is built
+against the exact Android common kernel commit, config, and `vmlinux.symvers` named in
+`.github/workflows/build-opd2515.yml`. Rebuild the matching module whenever `lkm/dfroot.c` changes;
+the workflow also checks its undefined imports and vermagic before packaging it.
 
 ## How it works
 
@@ -140,11 +135,21 @@ next privileged call to the hooked function runs the shellcode, which loads the 
 4. **libc++ hook** (fires in init, uid=0, tid=1) - shellcode patched at
    `std::ostream::sentry::sentry()`. It checks uid and tid, creates `/dev/df` as a one-shot mutex so
    it cannot re-enter, then execs `insmod` in the `vendor_modprobe` domain.
-5. **dfroot.ko init** - sets SELinux permissive, bypasses DEFEX via kprobes where present, then uses
-   `call_usermodehelper` to run the bootstrap.
+5. **dfroot.ko init** - sets SELinux permissive, bypasses DEFEX via kprobes where present, audits the
+   OPPO guard targets in observe-only mode by default, then uses `call_usermodehelper` to run the
+   bootstrap. The audit summary is printed to the kernel log; `/dev/dfm0` remains a progress marker.
 6. **bootstrap** - reads the app's device-protected settings, adopts the zygote environment, sets
    partitions read-only, optionally disables all modules, and finally launches the SU daemon from
-   your installed SU manager.
+   the bundled or selected SU manager.
+
+## Current candidate status
+
+- Target: `OPD2515` with kernel release `6.12.58-android16-6-g7704a1ae279b-ab15213644-4k`.
+- Boot-time autorun is disabled by default and is independent of the manual run path.
+- The OPPO guard audit is observation-only unless the module parameter `enforce=1` is explicitly
+  supplied; the APK does not supply that parameter.
+- Build success, the app's own status text, and module markers are not independent proof of root,
+  popup absence, reboot cleanup, or panic-free stability.
 
 ## Credits
 

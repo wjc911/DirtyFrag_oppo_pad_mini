@@ -51,9 +51,8 @@
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toBottomOf="@+id/appBarLayout" />
 
-    <!-- SU Manager picker. Upstream 3.2 removed the bundled ksud binary and
-         stages it from the selected manager's nativeLibraryDir, so the exploit
-         cannot run at all until a manager is picked here. -->
+    <!-- The APK bundles the OPD2515 KernelSU daemon and selects it by default.
+         An installed manager carrying libksud.so may still be selected for testing. -->
     <com.google.android.material.card.MaterialCardView
         android:id="@+id/cardSuManager"
         android:layout_width="0dp"

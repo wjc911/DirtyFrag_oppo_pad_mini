@@ -9,9 +9,9 @@
 #include <unistd.h>
 
 #define BLKROSET   0x125d
-#define KSUD_STAGE "/data/user_de/0/df.root/ksud"
+#define KSUD_STAGE "/data/user_de/0/local.opd2515.dirtyfrag908/ksud"
 #define KSUD       "/data/adb/ksud"
-#define PREFS_PATH "/data/user_de/0/df.root/shared_prefs/dfroot.xml"
+#define PREFS_PATH "/data/user_de/0/local.opd2515.dirtyfrag908/shared_prefs/dfroot.xml"
 #define MODULES_DIR "/data/adb/modules"
 
 static int pref_true(const char *buf, const char *key)
@@ -148,6 +148,23 @@ static int late_load_running(void)
     return found;
 }
 
+static int kernelsu_loaded(void)
+{
+    FILE *f = fopen("/proc/modules", "r");
+    if (!f)
+        return 0;
+    char line[256];
+    int found = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (!strncmp(line, "kernelsu ", 9)) {
+            found = 1;
+            break;
+        }
+    }
+    fclose(f);
+    return found;
+}
+
 static int run_ctx(const char *ctx, char *const argv[])
 {
     pid_t pid = fork();
@@ -164,6 +181,16 @@ static int run_ctx(const char *ctx, char *const argv[])
     int status;
     waitpid(pid, &status, 0);
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+/* The exploit needs a short permissive window so init can execute the
+ * app-private bootstrap.  Restore the device's original enforcing state as
+ * soon as ksud has finished its late-load handoff. */
+static int restore_enforcing(void)
+{
+    char *argv[] = { "/system/bin/sh", "-c",
+        "echo 1 > /sys/fs/selinux/enforce", NULL };
+    return run_ctx(NULL, argv);
 }
 
 static void touch(const char *path)
@@ -203,6 +230,11 @@ int main(void)
         return 1;
     }
 
+    /* Fixed OPD2515 path: do not carry forward settings that can trigger a
+     * soft reboot or batch-disable KernelSU modules on the next run. */
+    soft_reboot = 0;
+    disable_mods = 0;
+
     touch("/dev/dfm2");
     if (adopt_zygote_env())
         touch("/dev/dfmw0");
@@ -220,7 +252,8 @@ int main(void)
     }
 
     touch("/dev/dfm5");
-    if (run_ctx(NULL, (char *[]){ KSUD_STAGE, "late-load", "--package-name", su_manager, NULL }) == 0) {
+    /* Keep ksud from force-stopping this APK when it refreshes the manager. */
+    if (run_ctx(NULL, (char *[]){ KSUD_STAGE, "late-load", "--package-name", "me.weishu.kernelsu", "--allow-shell", NULL }) == 0) {
         touch("/dev/dfm6");
         if (soft_reboot) {
             while (late_load_running()) sleep(1);
@@ -229,6 +262,19 @@ int main(void)
     } else {
         touch("/dev/dfme2");
     }
+
+    /* ksud forks the actual module-loader worker.  The CLI parent can return
+     * before that worker has called init_module, so do not restore Enforcing
+     * until the worker exits or kernelsu is visible in /proc/modules. */
+    for (int i = 0; i < 30 && late_load_running() && !kernelsu_loaded(); i++)
+        sleep(1);
+    if (kernelsu_loaded())
+        touch("/dev/dfm7");
+    else
+        touch("/dev/dfme4");
+
+    if (restore_enforcing() != 0)
+        touch("/dev/dfme3");
 
     run_ctx(NULL, (char *[]){ "/system/bin/rmmod", "dfroot", NULL });
     return 0;

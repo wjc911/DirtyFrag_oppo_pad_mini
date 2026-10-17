@@ -68,7 +68,7 @@ public class MainActivity extends AppCompatActivity implements IReporter {
     private boolean moduleRefresh;
 
     /** Device-protected storage context: bootstrap.c reads its prefs from
-     *  /data/user_de/0/df.root/, so every pref the exploit depends on must live
+     *  /data/user_de/0/local.opd2515.dirtyfrag908/, so every pref the exploit depends on must live
      *  there, not in credential-protected storage. */
     private Context mDeCtx;
     /** Package name of the SU manager whose libksud.so gets staged, or null. */
@@ -346,7 +346,7 @@ public class MainActivity extends AppCompatActivity implements IReporter {
         setContentView(binding.getRoot());
 
         // Version tag flowing right after the header title.
-        SpannableString title = new SpannableString("DirtyFrag 1.11");
+        SpannableString title = new SpannableString("DirtyFrag " + BuildConfig.VERSION_NAME);
         pillSpan = new VersionPillSpan(0.45f);
         title.setSpan(pillSpan, 10, title.length(),
                 SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE);
@@ -473,13 +473,7 @@ public class MainActivity extends AppCompatActivity implements IReporter {
 
         binding.btnRun.setOnClickListener(v -> {
             if (running) return;
-            // Two-tap confirmation: first tap arms ("Are you sure"), second runs.
-            if (!runArmed) {
-                runArmed = true;
-                v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
-                binding.btnRun.setText("Are you sure");
-                return;
-            }
+            // One-tap launch: the APK is self-contained and needs no ADB confirmation.
             runArmed = false;
             v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
             running = true;
@@ -1305,6 +1299,9 @@ public class MainActivity extends AppCompatActivity implements IReporter {
                 running = false;
                 boolean rooted = new File("/dev/df").exists();
                 if (rooted) {
+                    // The kernel marker is authoritative; persist the success state.
+                    mDeCtx.getSharedPreferences("dfroot", MODE_PRIVATE)
+                            .edit().putBoolean("last_run_success", true).apply();
                     setRootedState(true);
                     binding.twoStep.setSeg2(1f, "Verified", 0xFFFFFFFF);
                 } else {

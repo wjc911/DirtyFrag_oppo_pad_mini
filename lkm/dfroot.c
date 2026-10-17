@@ -104,20 +104,6 @@ static int df_hook_enforce;
 module_param_named(enforce, df_hook_enforce, int, 0444);
 MODULE_PARM_DESC(enforce, "0 = audit/hook targets but never skip a body (default)");
 
-static void df_audit_write(const char *msg)
-{
-    struct file *f;
-    loff_t pos = 0;
-
-    f = filp_open("/dev/dfm0", O_WRONLY | O_CREAT, 0600);
-    if (IS_ERR(f)) {
-        pr_warn("dfroot: audit write: /dev/dfm0 open failed (%ld)\n", PTR_ERR(f));
-        return;
-    }
-    kernel_write(f, msg, strlen(msg), &pos);
-    filp_close(f, NULL);
-}
-
 static int __init df_audit_run(kallsyms_lookup_name_t get_addr)
 {
     char line[1024];
@@ -171,7 +157,6 @@ static int __init df_audit_run(kallsyms_lookup_name_t get_addr)
     len += scnprintf(line + len, sizeof(line) - len, " total=%u/%u\n",
                      hit, (unsigned int)DF_AUDIT_N);
 
-    df_audit_write(line);
     pr_info("dfroot: audit %s", line);
 
     df_audit_ok = hit > 0;

@@ -28,7 +28,7 @@ ko_target:
 libcxx_ko_target_off:
     .int ko_target - libcxx_data
 bootstrap_path:
-    .asciz "/data/user_de/0/df.root/bootstrap"
+    .asciz "/data/user_de/0/local.opd2515.dirtyfrag908/bootstrap"
 
     .align 4
 

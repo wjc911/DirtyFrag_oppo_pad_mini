@@ -1,154 +1,90 @@
-# DirtyFrag (CVE-2026-43284)
+# DirtyFrag for OPPO Pad Mini (OPD2515)
 
-> **OPD2515 build:** this account fork targets OPPO Pad Mini `OPD2515` running exactly
-> `6.12.58-android16-6-g7704a1ae279b-ab15213644-4k`. CI rebuilds `dfroot.ko`
-> against the matching Android common kernel commit and packages the matching
-> KernelSU userspace daemon into the APK. One on-device cold-boot test confirmed
-> root returned after restart without ADB. This result is device/kernel-specific;
-> revalidate after any system update.
+This repository contains the OPD2515-specific DirtyFrag build used for temporary,
+user-launched root on the OPPO Pad Mini.
 
-DirtyFrag is a hardened fork of [diabl0w/DFRoot](https://github.com/diabl0w/DFRoot). It exploits
-CVE-2026-43284 (DirtyFrag), a kernel page cache write primitive, to load a kernel module without an
-unlocked bootloader and without a custom kernel. The fork targets Samsung phones (OneUI, RKP and KDP
-hardening) and keeps upstream's SU-manager agnostic design.
+The shipped profile is locked to:
 
-> [!IMPORTANT]
-> Root is **ephemeral**. The kernel module, `su` and any loaded modules are gone the moment the
-> device reboots. A reboot always returns the phone to a clean, unrooted state - which is also the
-> recovery path if a run goes wrong.
+- **Model:** OPD2515
+- **Kernel:** 6.12.58-android16-6-g7704a1ae279b-ab15213644-4k
+- **Application ID:** local.opd2515.dirtyfrag908
+- **Release:** 1.12
 
-## Install
+The exploit is device and kernel specific. A system update can change the kernel
+or its mitigation state, so the target check is intentionally strict.
 
-1. Install the DirtyFrag APK from [Releases](https://github.com/wjc911/DirtyFrag_oppo_pad_mini/releases/latest).
-2. Install an SU manager that **ships `libksud.so`**:
-   - Samsung - **required**:
-     - [diabl0w's KernelSU for Samsung, samsung-v1.0](https://github.com/diabl0w/KernelSU/releases/tag/samsung-v1.0) -
-       bundles `libksud.so` and carries the Samsung KDP/DEFEX kernel support. On a Samsung phone
-       this is the manager to use; stock KernelSU builds cannot take root there.
-   - Other:
-     - [KernelSU](https://github.com/tiann/KernelSU/releases/latest)
-     - [KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next/releases/latest)
-     - [KowSU](https://github.com/KOWX712/KernelSU/releases/latest)
-     - [BakaSU](https://github.com/Baka-SU/BakaSU/releases/latest) (formerly ReSukiSU)
-3. Open DirtyFrag, pick your manager in the **SU Manager** card, then press **Run exploit**.
+## Runtime behavior
 
-> [!WARNING]
-> Since 1.10 (upstream 3.2) DirtyFrag no longer bundles `ksud` - it is staged from the selected
-> manager's own `libksud.so`. A manager that does not ship that library cannot give you root. The
-> older advice to install a CI / Actions build of the manager no longer applies.
+1. Install the APK from the [latest release](https://github.com/wjc911/DirtyFrag_oppo_pad_mini/releases/latest).
+2. Open **DirtyFrag** and press **Run** once.
+3. The APK carries the OPD2515 KernelSU userspace daemon, so normal operation does
+   not require ADB or a second manager app.
+4. Root is temporary. A full reboot removes the loaded dfroot and KernelSU
+   modules; the APK must be launched again after that reboot.
 
-A fresh install of DirtyFrag gets a new Android UID, so the grant in the manager has to be given
-again after every reinstall.
+The boot receiver is disabled in this profile. Soft reboot and automatic module
+disabling are also forced off so the run does not change package-manager state.
+The bootstrap restores SELinux enforcing after the KernelSU late-load handoff.
+The kernel module records OPPO guard activity for diagnostics; it does not unload
+or freeze those components.
 
-<img width="540" height="1170" alt="Screenshot_20261007_224642" src="https://github.com/user-attachments/assets/b12c72e3-05de-44d1-ad9f-251672370d8b" />
+If the model or complete kernel release does not match the values above, the APK
+stops before attempting the exploit.
 
-## Features
+## What is shipped
 
-- Choose your SU manager inside the app
-- **Autorun** (start on boot), gated behind Expert mode, with a failed-run interlock that disables
-  itself after a failed attempt so a bad run cannot boot-loop you
-- **Auto reboot** (soft reboot) - since 1.11 (upstream 4.1) this works with every KernelSU
-  derivative: `dfroot.ko` is unloaded after late-load and ksud's own `soft-reboot` is run
-- **KernelSU Modules** on/off - works without root, applied by the kernel module before ksud starts
-- RO Partition Protection
-- Advanced log, with one tap to save it to Downloads
-- Update pill in the title, so you can see when a newer release is published
-- Shizuku not needed
+- The exact Android 16 / 6.12 dfroot.ko for the OPD2515 GKI.
+- A bundled libksud.so userspace daemon.
+- A one-tap foreground flow with no boot-time autorun.
+- Device-protected preferences so a reboot starts with a clean run state.
+- Audit-only guard probes and explicit cleanup of the temporary dfroot module.
 
-## FAQ
+An installed app that carries a compatible libksud.so can still be selected from
+the SU Manager card for development experiments, but it is not required by the
+released OPD2515 profile.
 
-**Q: Log says patching failed and that my device isn't vulnerable**
+## Building locally
 
-A: Sorry, there is no fix. Either:
-  - your device's kernel is too new
-  - your device manufacturer backported the official mitigation
-  - [accidental mitigation](https://github.com/V4bel/dirtyfrag/issues/23#issuecomment-4405314290)
-    (typically seen on kernel 6.1)
+~~~sh
+JAVA_HOME="<Android Studio jbr>" ./gradlew --no-daemon :app:assembleRelease
+~~~
 
-**Q: Log says "SUCCESS" or "ksud exited with error", but I don't have root**
+The APK is written to app/build/outputs/apk/release/dirtyfrag.apk.
 
-A: Turn off **Auto reboot** on the Autorun card if it is enabled - a soft reboot that the manager
-cannot complete leaves the loaded module unloaded again. Otherwise see
-[upstream discussion 69](https://github.com/diabl0w/DFRoot/discussions/69).
+Release builds use app/keystore.jks, which is ignored by Git. Generate a local
+test key with:
 
-**Q: I installed a module and now I can't launch root without crashing**
+~~~sh
+keytool -genkeypair -v -keystore app/keystore.jks -alias dirtyfrag   -keyalg RSA -keysize 2048 -validity 10000   -storepass dirtyfrag -keypass dirtyfrag
+~~~
 
-A: Set the **KernelSU Modules** card to Disabled and reroot. The switch works without root, which is
-the point - it is the escape hatch when a module is the thing that is crashing the run.
+The eight prebuilt modules under app/src/main/jni/ko/ are tracked inputs for a
+plain clone. The CI Build workflow also rebuilds every KMI module from
+lkm/dfroot.c. The OPD2515 workflow additionally rebuilds the exact module
+against the pinned Android common kernel and GKI symbol table.
 
-**Q: Module + Autorun and now I am bootlooping**
+## CI and releases
 
-A: Android usually detects the bootloop and offers Safe Mode; otherwise hold **Volume Down** during
-boot. From Safe Mode turn Autorun off and set KernelSU Modules to Disabled, or just uninstall
-DirtyFrag until you stabilise. If you cannot get far enough into the system, `adb uninstall df.root`
-from any PC works on user builds without root.
+- Build runs on pushes and pull requests to main, and on v* tags.
+- Build OPD2515 exact candidate runs on pushes to main and can be dispatched
+  manually.
+- A v* tag creates a signed release APK from the tag's source and extracts its
+  notes from CHANGELOG.md.
+- Release signing uses the repository secret DIRTYFRAG_KEYSTORE_B64; the private
+  keystore is never committed.
 
-**Q: The progress bar sits at 0 percent**
+## Technical outline
 
-A: That is the app's log-marker mapping, not the exploit. The run window is 70 seconds - do not
-re-run a "slow" run, the daemon may still be working.
-
-**Q: How do I remove root cleanly?**
-
-A: Use the in-app **Remove KSU/KSUD** entry. Never run `ksud uninstall` by hand alongside DirtyFrag:
-it tries to restore a boot image backup that this flow never made, and can reboot the device.
-
-## Building
-
-```sh
-JAVA_HOME="<Android Studio jbr>" ./gradlew assembleRelease
-```
-
-The APK is written to `app/build/outputs/apk/release/dirtyfrag.apk`.
-
-Release builds are signed with `app/keystore.jks`, which is gitignored (the signing config expects
-alias `dirtyfrag` and `dirtyfrag` for both passwords). Generate your own before building:
-
-```sh
-keytool -genkeypair -v -keystore app/keystore.jks -alias dirtyfrag \
-  -keyalg RSA -keysize 2048 -validity 10000 \
-  -storepass dirtyfrag -keypass dirtyfrag
-```
-
-The eight prebuilt kernel modules are committed under `app/src/main/jni/ko/`. Upstream gitignores
-them and builds them per-KMI in CI; this fork commits them so a plain clone builds without a DDK
-toolchain. They are built by this repo's `Build` workflow (the `LKMs / <kmi>` jobs) from the
-current `lkm/dfroot.c`, so they must be rebuilt whenever that file changes: run the workflow,
-download the `df-lkm-<kmi>` artifacts and drop them in this directory. To build them yourself
-instead, use upstream's `make` / podman DDK flow.
-
-## How it works
-
-The Android kernel decrypts AES-CBC ESP packets directly into the page cache of files open for
-`splice()`. By crafting `IV = AES_ECB_DEC(key, current_content) XOR desired_content`, any
-16-byte-aligned block in a mapped shared library can be overwritten without write permission and
-without copy-on-write.
-
-The exploit uses this primitive to patch shellcode into `libc++.so` in the kernel's page cache. The
-next privileged call to the hooked function runs the shellcode, which loads the kernel module via
-`insmod`.
-
-### Exploit chain
-
-1. **IpSec transform** - the app allocates a `UdpEncapsulationSocket` plus an SPI and builds an
-   AES-CBC/HMAC-SHA256 ESP transform through `IpSecManager`.
-2. **splicehelper -> crash_dump64** - splicehelper is spliced into `crash_dump64` using the CBC
-   primitive. `crash_dump64` runs in the `crash_dump` SELinux domain, which can open `vendor_file`
-   labelled files that `untrusted_app` cannot read - the bridge we need.
-3. **dfroot.ko -> vendor_file** - the kernel module is written through that bridge into a
-   `vendor_file`-labelled file.
-4. **libc++ hook** (fires in init, uid=0, tid=1) - shellcode patched at
-   `std::ostream::sentry::sentry()`. It checks uid and tid, creates `/dev/df` as a one-shot mutex so
-   it cannot re-enter, then execs `insmod` in the `vendor_modprobe` domain.
-5. **dfroot.ko init** - sets SELinux permissive, bypasses DEFEX via kprobes where present, then uses
-   `call_usermodehelper` to run the bootstrap.
-6. **bootstrap** - reads the app's device-protected settings, adopts the zygote environment, sets
-   partitions read-only, optionally disables all modules, and finally launches the SU daemon from
-   your installed SU manager.
+DirtyFrag uses the DirtyFrag page-cache write primitive to patch a privileged
+libc++ call path and load the matching kernel module. The module starts the
+app-private bootstrap through the vendor modprobe path. The bootstrap stages the
+bundled ksud, waits for the late-load worker to finish, restores SELinux
+enforcing, and removes the temporary dfroot module. Nothing in this profile
+writes a boot image or enables a boot-time root path.
 
 ## Credits
 
 - Upstream project and exploit chain: https://github.com/diabl0w/DFRoot
 - Original PoC and various code: https://github.com/lsposed/lspromise
-- SELinux permissive kernel modules and various code: https://github.com/polygraphene/DFReroot
+- SELinux permissive modules and related code: https://github.com/polygraphene/DFReroot
 - Unprivileged XFRM socket method: https://github.com/combeng6th/DirtyInit

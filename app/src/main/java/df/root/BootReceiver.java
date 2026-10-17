@@ -19,7 +19,7 @@ import java.io.File;
  * Since upstream 3.2 the exploit binary no longer takes a soft-reboot flag:
  * the LKM execs "bootstrap", which reads soft_reboot / su_manager /
  * disable_modules directly out of the device-encrypted prefs at
- * /data/user_de/0/df.root/shared_prefs/dfroot.xml. BootReceiver therefore
+ * /data/user_de/0/local.opd2515.dirtyfrag908/shared_prefs/dfroot.xml. BootReceiver therefore
  * mirrors the user's choice into that key before starting the run.
  */
 public class BootReceiver extends BroadcastReceiver implements IReporter {

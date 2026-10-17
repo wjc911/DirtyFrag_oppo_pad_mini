@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.12.1
+
+CI maintenance patch.
+
+- Made the tracked OPD2515 bundled debug workflow create its ephemeral signing
+  key before the debug build, so the manual workflow is self-contained.
+- No runtime or device behavior changed from 1.12.
+
 ## 1.12
 
 OPD2515-specific temporary-root release.
